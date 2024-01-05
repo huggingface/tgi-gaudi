@@ -717,6 +717,7 @@ class CausalLM(Model):
         if stopped:
             if self.hb_profer_started == True:
                 self.hb_profer.step()
+            htorch.core.mark_step()
             return generations, None
 
         # Slice unused values from prefill, use it to store next token
