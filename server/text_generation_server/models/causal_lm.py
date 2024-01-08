@@ -377,7 +377,8 @@ class CausalLM(Model):
     ):
         device = torch.device("hpu")
 
-        dtype = torch.bfloat16 if dtype is None else dtype
+        self.is_fp8 = dtype == torch.float8_e4m3fn
+        dtype = torch.bfloat16 if dtype is None or self.is_fp8 else dtype
 
         from optimum.habana.transformers.modeling_utils import adapt_transformers_to_gaudi
 
@@ -451,6 +452,9 @@ class CausalLM(Model):
             if self.enable_hpu_graph:
                 model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
 
+        if self.is_fp8:
+            model = self.setup_quantization(model)
+
         if model.config.model_type in MODELS_OPTIMIZED_WITH_STATIC_SHAPES:
             self.is_optimized_for_gaudi = True
         else:
@@ -502,6 +506,19 @@ class CausalLM(Model):
     def batch_type(self) -> Type[CausalLMBatch]:
         return CausalLMBatch
 
+    def setup_quantization(self, model):
+        import habana_frameworks.torch.core as htcore
+        from habana_frameworks.torch.core.quantization import _check_params_as_const, _mark_params_as_const
+        from habana_frameworks.torch.hpu import hpu
+
+        print("Initializing inference with quantization")
+        _mark_params_as_const(model)
+        _check_params_as_const(model)
+
+        hpu.enable_quantization()
+        htcore.hpu_initialize(model)
+        return model
+
     def decode(self, generated_ids: List[int]) -> str:
         return self.tokenizer.decode(generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
 
@@ -519,6 +536,7 @@ class CausalLM(Model):
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "past_key_values": past_key_values,
+            "kv_cache_fp8": self.is_fp8,
         }
 
         if self.is_optimized_for_gaudi:

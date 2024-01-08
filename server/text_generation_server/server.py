@@ -151,6 +151,8 @@ def serve(
         logger.info("Server:server_inner: data type = {}, local_url = {}".format(dtype, local_url))
         if dtype == "bfloat16" or None:
             data_type = torch.bfloat16
+        elif dtype == "float8":
+            data_type  = torch.float8_e4m3fn
         else:
             data_type = torch.float
         if revision == "None":

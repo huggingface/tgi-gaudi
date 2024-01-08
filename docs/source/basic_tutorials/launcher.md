@@ -74,7 +74,7 @@ Options:
           The dtype to be forced upon the model. This option cannot be used with `--quantize`
           
           [env: DTYPE=]
-          [possible values: float16, bfloat16]
+          [possible values: float16, bfloat16, float8]
 
 ```
 ## TRUST_REMOTE_CODE
