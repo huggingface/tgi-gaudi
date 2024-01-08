@@ -186,7 +186,12 @@ class CausalLMBatch(Batch):
         # FIXME: max_seq_len for non optimized code
         max_input_length = max(req.input_length for req in requests)
         offsets = [(max_input_length - b.input_length) for b in batches]
-        scenario = 'CONCAT' if len(batches) > 1 else 'FILTER'
+        if len(batches) > 1:
+            scenario = 'CONCAT'
+        elif len(req_ids[0]) == len(batches[0].requests):
+            scenario = 'RESHAPE'
+        else:
+            scenario = 'FILTER'
         dbg_trace(scenario, f'bs:{[b.input_ids.size(0) for b in batches]}->{new_bs} num_reqs:{[len(b.requests) for b in batches]}->{len(requests)} offsets:{offsets}')
 
         max_seq_len = batches[0].attention_mask.size(1)
@@ -551,6 +556,8 @@ class CausalLM(Model):
     def generate_token(self, batch: CausalLMBatch) -> Tuple[List[Generation], Optional[CausalLMBatch]]:
         prefill = batch.past_key_values is None
         scenario = 'PREFILL' if prefill else 'GENERATE'
+        if round_up(batch.input_ids.size(0), BATCH_BUCKET_SIZE) != batch.input_ids.size(0) and not prefill:
+            batch = batch.__class__.recombine([batch], [[req.data.id for req in batch.requests]], self.is_optimized_for_gaudi)
         dbg_trace(scenario, f'bs:{batch.input_ids.size(0)} num_reqs:{len(batch.requests)} seq_len:{batch.input_ids.shape[1]}')
         self.step = self.step + 1
         if self.hb_profer_started == True and self.step > self.profiling_warmup_steps + self.profiling_steps:
