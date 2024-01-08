@@ -186,6 +186,7 @@ class CausalLMBatch(Batch):
         # FIXME: max_seq_len for non optimized code
         max_input_length = max(req.input_length for req in requests)
         offsets = [(max_input_length - b.input_length) for b in batches]
+
         if len(batches) > 1:
             scenario = 'CONCAT'
         elif len(req_ids[0]) == len(batches[0].requests):
@@ -193,6 +194,11 @@ class CausalLMBatch(Batch):
         else:
             scenario = 'FILTER'
         dbg_trace(scenario, f'bs:{[b.input_ids.size(0) for b in batches]}->{new_bs} num_reqs:{[len(b.requests) for b in batches]}->{len(requests)} offsets:{offsets}')
+
+        if scenario == 'FILTER' and batches[0].input_ids.size(0) == new_bs:
+            # filter requests in place
+            batches[0].requests = requests
+            return batches[0]
 
         max_seq_len = batches[0].attention_mask.size(1)
         input_length = max(r.input_length for r in requests)
