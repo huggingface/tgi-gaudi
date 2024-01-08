@@ -173,37 +173,37 @@ class CausalLMBatch(Batch):
         new_bs = round_up(sum([len(reqs) for reqs in req_ids]), BATCH_BUCKET_SIZE)
         batch_id = batches[0].batch_id
         device = batches[0].input_ids.device
+        grouped_requests = [[req for req in batch.requests if req.data.id in ids] for batch, ids in zip(batches, req_ids)]
+        flat_requests = list(itertools.chain(*grouped_requests))
 
-        # TODO: for now use consecutive indices. This could be optimized to reuse existing batch memory and only overwrite
-        # indices that are no longer used instead of allocating new memory
-        free_indices = itertools.count(0)
-        to_tensors = lambda ind: (torch.tensor(ind[0], device=device), torch.tensor(ind[1], device=device))
-        requests = [[req for req in batch.requests if req.data.id in ids] for batch, ids in zip(batches, req_ids)]
-        indices = [[to_tensors(req.update_idx(next(free_indices))) for req in batch_reqs] for batch_reqs in requests]
-        requests = list(itertools.chain(*requests))
+        max_input_length = max(req.input_length for req in flat_requests)
+        offsets = [(max_input_length - b.input_length) for b in batches]
 
         # TODO: Add support for changing max seq len, i.e. due to output length bucketing
         # FIXME: max_seq_len for non optimized code
-        max_input_length = max(req.input_length for req in requests)
-        offsets = [(max_input_length - b.input_length) for b in batches]
-
         if len(batches) > 1:
             scenario = 'CONCAT'
         elif len(req_ids[0]) == len(batches[0].requests):
             scenario = 'RESHAPE'
         else:
             scenario = 'FILTER'
-        dbg_trace(scenario, f'bs:{[b.input_ids.size(0) for b in batches]}->{new_bs} num_reqs:{[len(b.requests) for b in batches]}->{len(requests)} offsets:{offsets}')
+        dbg_trace(scenario, f'bs:{[b.input_ids.size(0) for b in batches]}->{new_bs} num_reqs:{[len(b.requests) for b in batches]}->{len(flat_requests)} offsets:{offsets}')
 
         if scenario == 'FILTER' and batches[0].input_ids.size(0) == new_bs:
             # filter requests in place
-            batches[0].requests = requests
+            batches[0].requests = flat_requests
             return batches[0]
 
+        # TODO: for now use consecutive indices. This could be optimized to reuse existing batch memory and only overwrite
+        # indices that are no longer used instead of allocating new memory
+        free_indices = itertools.count(0)
+        to_tensors = lambda ind: (torch.tensor(ind[0], device=device), torch.tensor(ind[1], device=device))
+        indices = [[to_tensors(req.update_idx(next(free_indices))) for req in batch_reqs] for batch_reqs in grouped_requests]
+
         max_seq_len = batches[0].attention_mask.size(1)
-        input_length = max(r.input_length for r in requests)
+        input_length = max(r.input_length for r in flat_requests)
         right_padding = max_seq_len - input_length
-        max_tokens = len(requests) * max_seq_len
+        max_tokens = len(flat_requests) * max_seq_len
 
         chunk_size = batches[0].past_key_values[0][0].size(0) // batches[0].input_ids.size(0)
         num_layers = len(batches[0].past_key_values)
@@ -259,10 +259,10 @@ class CausalLMBatch(Batch):
 
         past_key_values = past_key_values_type(past_key_values)
 
-        top_n_tokens = [r.data.top_n_tokens for r in requests]
+        top_n_tokens = [r.data.top_n_tokens for r in flat_requests]
         top_n_tokens_tensor = torch.tensor(top_n_tokens, device=device, dtype=torch.int64)
         next_token_chooser = HeterogeneousNextTokenChooser.from_pb(
-            [r.data.parameters for r in requests],
+            [r.data.parameters for r in flat_requests],
             batches[0].next_token_chooser.device,
             batches[0].next_token_chooser.dtype
         )
@@ -271,7 +271,7 @@ class CausalLMBatch(Batch):
 
         return cls(
             batch_id=batch_id,
-            requests=requests,
+            requests=flat_requests,
             input_ids=input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
