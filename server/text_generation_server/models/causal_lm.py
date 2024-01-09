@@ -169,30 +169,29 @@ class CausalLMBatch(Batch):
         )
 
     @classmethod
-    def recombine(cls, batches: List["CausalLMBatch"], req_ids: List[List[int]], is_optimized_for_gaudi: bool = False) -> "CausalLMBatch":
-        new_bs = round_up(sum([len(reqs) for reqs in req_ids]), BATCH_BUCKET_SIZE)
+    def recombine(cls, batches: List["CausalLMBatch"], is_optimized_for_gaudi: bool = False) -> "CausalLMBatch":
+        old_bs = batches[0].input_ids.size(0)
+        new_bs = round_up(sum(len(b) for b in batches), BATCH_BUCKET_SIZE)
         batch_id = batches[0].batch_id
         device = batches[0].input_ids.device
-        grouped_requests = [[req for req in batch.requests if req.data.id in ids] for batch, ids in zip(batches, req_ids)]
+
+        grouped_requests = [[req for req in batch.requests] for batch in batches]
         flat_requests = list(itertools.chain(*grouped_requests))
 
-        max_input_length = max(req.input_length for req in flat_requests)
-        offsets = [(max_input_length - b.input_length) for b in batches]
+        max_input_length = max(b.max_input_length() for b in batches)
+        offsets = [max_input_length - b.input_length for b in batches]
 
         # TODO: Add support for changing max seq len, i.e. due to output length bucketing
         # FIXME: max_seq_len for non optimized code
         if len(batches) > 1:
             scenario = 'CONCAT'
-        elif len(req_ids[0]) == len(batches[0].requests):
+        elif old_bs != new_bs:
             scenario = 'RESHAPE'
+        elif offsets[0] != 0:
+            scenario = 'SHIFT'
         else:
-            scenario = 'FILTER'
-        dbg_trace(scenario, f'bs:{[b.input_ids.size(0) for b in batches]}->{new_bs} num_reqs:{[len(b.requests) for b in batches]}->{len(flat_requests)} offsets:{offsets}')
-
-        if scenario == 'FILTER' and batches[0].input_ids.size(0) == new_bs and offsets[0] == 0:
-            # filter requests in place
-            batches[0].requests = flat_requests
             return batches[0]
+        dbg_trace(scenario, f'bs:{[b.input_ids.size(0) for b in batches]}->{new_bs} offsets:{offsets}')
 
         # TODO: for now use consecutive indices. This could be optimized to reuse existing batch memory and only overwrite
         # indices that are no longer used instead of allocating new memory
@@ -381,16 +380,20 @@ class CausalLMBatch(Batch):
 
     @tracer.start_as_current_span("filter")
     def filter(self, request_ids: List[int], is_optimized_for_gaudi: bool = False) -> Optional["CausalLMBatch"]:
-        return self.__class__.recombine([self], [request_ids], is_optimized_for_gaudi)
+        dbg_trace('FILTER', f'num_reqs:{len(self.requests)} -> {len(request_ids)}')
+        self.requests = [req for req in self.requests if req.data.id in request_ids]
+        return self.__class__.recombine([self], is_optimized_for_gaudi)
 
     @classmethod
     @tracer.start_as_current_span("concatenate")
     def concatenate(cls, batches: List["CausalLMBatch"], is_optimized_for_gaudi: bool = False) -> "CausalLMBatch":
-        return cls.recombine(batches, [[req.data.id for req in b.requests] for b in batches], is_optimized_for_gaudi)
+        return cls.recombine(batches, is_optimized_for_gaudi)
 
     def __len__(self):
         return len(self.requests)
 
+    def max_input_length(self):
+        return max(req.input_length for req in self.requests)
 
 class CausalLM(Model):
     def __init__(
@@ -561,9 +564,11 @@ class CausalLM(Model):
     @tracer.start_as_current_span("generate_token")
     def generate_token(self, batch: CausalLMBatch) -> Tuple[List[Generation], Optional[CausalLMBatch]]:
         prefill = batch.past_key_values is None
+        # Check if we need to do any bookkeeping first
+        if not prefill:
+            batch = batch.__class__.recombine([batch], self.is_optimized_for_gaudi)
+
         scenario = 'PREFILL' if prefill else 'GENERATE'
-        if round_up(batch.input_ids.size(0), BATCH_BUCKET_SIZE) != batch.input_ids.size(0) and not prefill:
-            batch = batch.__class__.recombine([batch], [[req.data.id for req in batch.requests]], self.is_optimized_for_gaudi)
         dbg_trace(scenario, f'bs:{batch.input_ids.size(0)} num_reqs:{len(batch.requests)} seq_len:{batch.input_ids.shape[1]}')
         self.step = self.step + 1
         if self.hb_profer_started == True and self.step > self.profiling_warmup_steps + self.profiling_steps:
