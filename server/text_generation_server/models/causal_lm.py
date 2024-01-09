@@ -154,9 +154,6 @@ class CausalLMBatch(Batch):
     top_n_tokens: List[int]
     top_n_tokens_tensor: torch.Tensor
 
-    # Maximum number of tokens this batch will grow to
-    max_tokens: int
-
     input_length: int
     right_padding: int
 
@@ -170,28 +167,37 @@ class CausalLMBatch(Batch):
 
     @classmethod
     def recombine(cls, batches: List["CausalLMBatch"], is_optimized_for_gaudi: bool = False) -> "CausalLMBatch":
-        old_bs = batches[0].input_ids.size(0)
-        new_bs = round_up(sum(len(b) for b in batches), BATCH_BUCKET_SIZE)
+        total_requests = sum(len(b) for b in batches)
+        new_bs = round_up(total_requests, BATCH_BUCKET_SIZE)
         batch_id = batches[0].batch_id
         device = batches[0].input_ids.device
 
-        grouped_requests = [[req for req in batch.requests] for batch in batches]
-        flat_requests = list(itertools.chain(*grouped_requests))
-
-        max_input_length = max(b.max_input_length() for b in batches)
+        max_input_length = max(b.input_length for b in batches)
         offsets = [max_input_length - b.input_length for b in batches]
+        padding = [b.right_padding for b in batches]
 
+        moves_needed = [total_requests - len(b) if b.batch_size == new_bs else total_requests for b in batches]
         # TODO: Add support for changing max seq len, i.e. due to output length bucketing
         # FIXME: max_seq_len for non optimized code
         if len(batches) > 1:
             scenario = 'CONCAT'
-        elif old_bs != new_bs:
+        elif batches[0].batch_size != new_bs:
             scenario = 'RESHAPE'
-        elif offsets[0] != 0:
+        elif padding[0] <= 1:
             scenario = 'SHIFT'
+            offsets = [b.max_input_length - max_input_length for b in batches]
+            max_input_length = max(b.max_input_length for b in batches)
         else:
+            scenario = 'SKIP'
+        dbg_trace(scenario, f'bs:{[b.batch_size for b in batches]}->{new_bs} reqs:{[len(b) for b in batches]} offsets:{offsets} padding:{padding} moves_needed:{moves_needed}')
+
+        if scenario == 'SKIP':
             return batches[0]
-        dbg_trace(scenario, f'bs:{[b.input_ids.size(0) for b in batches]}->{new_bs} offsets:{offsets}')
+
+        best_batch_idx = min(enumerate(moves_needed), key=lambda idx_val: idx_val[1])[0]
+
+        grouped_requests = [[req for req in batch.requests] for batch in batches]
+        flat_requests = list(itertools.chain(*grouped_requests))
 
         # TODO: for now use consecutive indices. This could be optimized to reuse existing batch memory and only overwrite
         # indices that are no longer used instead of allocating new memory
@@ -200,11 +206,11 @@ class CausalLMBatch(Batch):
         indices = [[to_tensors(req.update_idx(next(free_indices))) for req in batch_reqs] for batch_reqs in grouped_requests]
 
         max_seq_len = batches[0].attention_mask.size(1)
-        input_length = max(r.input_length for r in flat_requests)
+        #input_length = max(r.input_length for r in flat_requests)
+        input_length = max_input_length
         right_padding = max_seq_len - input_length
-        max_tokens = len(flat_requests) * max_seq_len
 
-        chunk_size = batches[0].past_key_values[0][0].size(0) // batches[0].input_ids.size(0)
+        chunk_size = batches[0].past_key_values[0][0].size(0) // batches[0].batch_size
         num_layers = len(batches[0].past_key_values)
         past_key_values_type = type(batches[0].past_key_values)
 
@@ -278,7 +284,6 @@ class CausalLMBatch(Batch):
             next_token_chooser=next_token_chooser,
             top_n_tokens=top_n_tokens,
             top_n_tokens_tensor=top_n_tokens_tensor,
-            max_tokens=max_tokens,
             input_length=input_length,
             right_padding=right_padding
         )
@@ -337,9 +342,6 @@ class CausalLMBatch(Batch):
             r.prefix_offset = input_len - 5
             r.read_offset = input_len
 
-        #max_tokens = new_bs * max_total_tokens
-        max_tokens = len(requests) * max_total_tokens
-
         input_ids = tokenized_inputs["input_ids"]
         attention_mask = tokenized_inputs["attention_mask"]
 
@@ -373,7 +375,6 @@ class CausalLMBatch(Batch):
             next_token_chooser=next_token_chooser,
             top_n_tokens=top_n_tokens,
             top_n_tokens_tensor=top_n_tokens_tensor,
-            max_tokens=max_tokens,
             input_length=max_input_length,
             right_padding=max_new_tokens + extra_padding if is_optimized_for_gaudi else 0
         )
@@ -392,8 +393,24 @@ class CausalLMBatch(Batch):
     def __len__(self):
         return len(self.requests)
 
+    @property
     def max_input_length(self):
         return max(req.input_length for req in self.requests)
+
+    @property
+    def batch_size(self):
+        return self.attention_mask.size(0)
+
+    @property
+    def seq_length(self):
+        return self.attention_mask.size(1)
+
+    # Maximum number of tokens this batch will grow to
+    @property
+    def max_tokens(self):
+        max_total_tokens = self.attention_mask.size(1)
+        return len(self.requests) * max_total_tokens
+
 
 class CausalLM(Model):
     def __init__(
@@ -569,7 +586,7 @@ class CausalLM(Model):
             batch = batch.__class__.recombine([batch], self.is_optimized_for_gaudi)
 
         scenario = 'PREFILL' if prefill else 'GENERATE'
-        dbg_trace(scenario, f'bs:{batch.input_ids.size(0)} num_reqs:{len(batch.requests)} seq_len:{batch.input_ids.shape[1]}')
+        dbg_trace(scenario, f'bs:{batch.batch_size} num_reqs:{len(batch.requests)} seq_len:{batch.seq_length}')
         self.step = self.step + 1
         if self.hb_profer_started == True and self.step > self.profiling_warmup_steps + self.profiling_steps:
             self.hb_profer.stop()
