@@ -189,7 +189,7 @@ class CausalLMBatch(Batch):
             scenario = 'FILTER'
         dbg_trace(scenario, f'bs:{[b.input_ids.size(0) for b in batches]}->{new_bs} num_reqs:{[len(b.requests) for b in batches]}->{len(flat_requests)} offsets:{offsets}')
 
-        if scenario == 'FILTER' and batches[0].input_ids.size(0) == new_bs:
+        if scenario == 'FILTER' and batches[0].input_ids.size(0) == new_bs and offsets[0] == 0:
             # filter requests in place
             batches[0].requests = flat_requests
             return batches[0]
