@@ -36,6 +36,7 @@ To use [🤗 text-generation-inference](https://github.com/huggingface/text-gene
 
    docker run -p 8080:80 -v $volume:/data --runtime=habana -e PT_HPU_ENABLE_LAZY_COLLECTIVES=true -e HABANA_VISIBLE_DEVICES=all -e OMPI_MCA_btl_vader_single_copy_mechanism=none --cap-add=sys_nice --ipc=host tgi_gaudi --model-id $model --sharded true --num-shard 8
    ```
+   **NOTE:** Set LIMIT_HPU_GRAPH=True for a larger sequence/decode lengths(e.g. 300/212).
 4. You can then send a request:
    ```bash
    curl 127.0.0.1:8080/generate \
@@ -75,7 +76,7 @@ Environment Variables Added:
 |  PROF_WARMUPSTEP      | integer        | 0           | Enable/disable profile, control profile warmup step, 0 means disable profile |  add -e in docker run command  |
 |  PROF_STEP            | interger       | 5           | Control profile step                                                         |  add -e in docker run command  |
 |  PROF_PATH            | string         | /root/text-generation-inference                                   | Define profile folder  | add -e in docker run command  |
-| LIMIT_HPU_GRAPH       | True/False     | True        | Skip HPU graph usage for prefill to save memory | add -e in docker run command |
+| LIMIT_HPU_GRAPH       | True/False     | True        | Skip HPU graph usage for prefill to save memory, set True for large sequence/decode lengths(e.g. 300/212) | add -e in docker run command |
 | BATCH_BUCKET_SIZE     | integer        | 8           | Batch size for decode operation will be rounded to the nearest multiple of this number. This limits the number of cached graphs | add -e in docker run command |
 | PREFILL_BATCH_BUCKET_SIZE     | integer        | 4           | Batch size for prefill operation will be rounded to the nearest multiple of this number. This limits the number of cached graphs | add -e in docker run command |
 
@@ -83,12 +84,12 @@ Environment Variables Added:
 
 
 Maximum batch size is controlled by two arguments:
-- For prefill operation, please set `--max-prefill-total-tokens` as `bs * max-input-length`, where `bs` is your exepected maximum prefill batch size.
-- For decode operation, please set `--max-batch-total-tokens` as `bs * max-total-tokens`, where `bs` is your exepected maximum decode batch size.
+- For prefill operation, please set `--max-prefill-total-tokens` as `bs * max-input-length`, where `bs` is your expected maximum prefill batch size.
+- For decode operation, please set `--max-batch-total-tokens` as `bs * max-total-tokens`, where `bs` is your expected maximum decode batch size.
 - Please note that batch size will be always padded to the nearest multiplication of `BATCH_BUCKET_SIZE` and `PREFILL_BATCH_BUCKET_SIZE`.
 
 Current limitations:
-- `LIMIT_HPU_GRAPH=False` is not supported as it causes accuracy issues.
+- `LIMIT_HPU_GRAPH=False` causes accuracy issues and it should be avoided.
 - Memory usage is higher than expected. Please consider using smaller batch sizes.
 
 > The license to use TGI on Habana Gaudi is the one of TGI: https://github.com/huggingface/text-generation-inference/blob/main/LICENSE
