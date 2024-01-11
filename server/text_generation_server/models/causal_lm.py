@@ -124,6 +124,32 @@ class CausalLMRequest:
         self.idx = new_idx
         return (new_idx, prev)
 
+
+class pass_through_tokenizer(PreTrainedTokenizerBase):
+    def __call__(
+        self,
+        text,
+        return_tensors,
+        padding,
+        return_token_type_ids,
+        truncation,
+        max_length
+    ):
+        assert return_tensors=="pt", "inccorrect input arguments when calling pass through tokenizer"
+        assert padding=="max_length","inccorrect input arguments when calling pass through tokenizer"
+        assert return_token_type_ids==False,"inccorrect input arguments when calling pass through tokenizer"
+        assert truncation==True,"inccorrect input arguments when calling pass through tokenizer"
+        all_tokens = [[int(i.strip()) for i in inner_text.split(',')] for inner_text in text]
+        return {"input_ids": torch.tensor([[2] * (max_length-len(tokens)) + tokens for tokens in all_tokens]),
+                "attention_mask": torch.tensor([[0] * (max_length-len(tokens)) + [1]*len(tokens) for tokens in all_tokens])}
+
+
+def get_dummy_input(tokenizer):
+    if type(tokenizer) == pass_through_tokenizer:
+        return "1, 1577"
+    else:
+        return "?"
+
 @dataclass
 class CausalLMBatch(Batch):
     batch_id: int
@@ -292,7 +318,7 @@ class CausalLMBatch(Batch):
         # this means that we cannot shift inputs to the left after a long input sequence
         # was filtered out
         new_bs = round_up(len(requests), PREFILL_BATCH_BUCKET_SIZE)
-        dummy_inputs = ["?"] * (new_bs - len(requests))
+        dummy_inputs = [get_dummy_input(tokenizer)] * (new_bs - len(requests))
         tokenized_inputs = tokenizer(
             [r.data.inputs for r in requests] + dummy_inputs,
             return_tensors="pt",
@@ -389,6 +415,8 @@ class CausalLM(Model):
             padding_side="left",
             truncation_side="left",
         )
+
+        self.tokenizer2 = pass_through_tokenizer()
 
         model_kwargs = {
             "revision": revision,
