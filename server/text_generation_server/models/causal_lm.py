@@ -68,8 +68,11 @@ def round_up(number, k):
     return (number + k - 1) // k * k
 
 
-def batch_alloc(new_bs, tensor):
-    return tensor.new_empty((new_bs,) + tensor.shape[1:])
+def prepare_memory(new_bs, tensor, inplace):
+    if inplace:
+        return tensor
+    else:
+        return tensor.new_empty((new_bs,) + tensor.shape[1:])
 
 
 def move_data(dst_tensor, chunk_size, indices, src_tensors):
@@ -177,6 +180,8 @@ class CausalLMBatch(Batch):
         padding = [b.right_padding for b in batches]
 
         moves_needed = [total_requests - len(b) if b.batch_size == new_bs else total_requests for b in batches]
+        target_batch_idx = min(enumerate(moves_needed), key=lambda idx_val: idx_val[1])[0]
+
         # TODO: Add support for changing max seq len, i.e. due to output length bucketing
         # FIXME: max_seq_len for non optimized code
         if len(batches) > 1:
@@ -188,25 +193,27 @@ class CausalLMBatch(Batch):
             offsets = [b.max_input_length - max_input_length for b in batches]
             max_input_length = max(b.max_input_length for b in batches)
         else:
-            scenario = 'SKIP'
-        dbg_trace(scenario, f'bs:{[b.batch_size for b in batches]}->{new_bs} reqs:{[len(b) for b in batches]} offsets:{offsets} padding:{padding} moves_needed:{moves_needed}')
-
-        if scenario == 'SKIP':
+            # Nothing to do
             return batches[0]
 
-        best_batch_idx = min(enumerate(moves_needed), key=lambda idx_val: idx_val[1])[0]
+        inplace = batches[target_batch_idx].batch_size == new_bs
+        dbg_trace(scenario, f'bs:{[b.batch_size for b in batches]}->{new_bs} reqs:{[len(b) for b in batches]} offsets:{offsets} padding:{padding} moves_needed:{moves_needed} inplace:{inplace}')
 
         grouped_requests = [[req for req in batch.requests] for batch in batches]
         flat_requests = list(itertools.chain(*grouped_requests))
+        if inplace and scenario != 'SHIFT':
+            # The data is already present in the batch. No need to move it
+            grouped_requests[target_batch_idx] = []
+            free_indices = batches[target_batch_idx].free_indices()
+        else:
+            free_indices = itertools.count(0)
 
         # TODO: for now use consecutive indices. This could be optimized to reuse existing batch memory and only overwrite
         # indices that are no longer used instead of allocating new memory
-        free_indices = itertools.count(0)
         to_tensors = lambda ind: (torch.tensor(ind[0], device=device), torch.tensor(ind[1], device=device))
         indices = [[to_tensors(req.update_idx(next(free_indices))) for req in batch_reqs] for batch_reqs in grouped_requests]
 
         max_seq_len = batches[0].attention_mask.size(1)
-        #input_length = max(r.input_length for r in flat_requests)
         input_length = max_input_length
         right_padding = max_seq_len - input_length
 
@@ -229,33 +236,33 @@ class CausalLMBatch(Batch):
         for b in batches:
             del b.input_ids
         src = shift_all(src, seq_dim, offsets)
-        input_ids = batch_alloc(new_bs, src[0])
+        input_ids = prepare_memory(new_bs, src[target_batch_idx], inplace)
         input_ids = move_data(input_ids, 1, indices, src)
 
         src = [b.attention_mask for b in batches]
         for b in batches:
             del b.attention_mask
         src = shift_all(src, seq_dim, offsets)
-        attention_mask = batch_alloc(new_bs, src[0])
+        attention_mask = prepare_memory(new_bs, src[target_batch_idx], inplace)
         attention_mask = move_data(attention_mask, 1, indices, src)
 
         src = [b.position_ids for b in batches]
         for b in batches:
             del b.position_ids
         src = shift_all(src, seq_dim, offsets)
-        position_ids = batch_alloc(new_bs, src[0])
+        position_ids = prepare_memory(new_bs, src[target_batch_idx], inplace)
         position_ids = move_data(position_ids, 1, indices, src)
 
         past_key_values = []
         for layer_num in range(num_layers):
             src = [b.past_key_values[layer_num][0] for b in batches]
             src = shift_all(src, key_dim, offsets)
-            updated_key = batch_alloc(new_bs * chunk_size, src[0])
+            updated_key = prepare_memory(new_bs * chunk_size, src[target_batch_idx], inplace)
             updated_key = move_data(updated_key, chunk_size, indices, src)
 
             src = [b.past_key_values[layer_num][1] for b in batches]
             src = shift_all(src, value_dim, offsets)
-            updated_value = batch_alloc(new_bs * chunk_size, src[0])
+            updated_value = prepare_memory(new_bs * chunk_size, src[target_batch_idx], inplace)
             updated_value = move_data(updated_value, chunk_size, indices, src)
 
             past_key_values.append((updated_key, updated_value))
@@ -410,6 +417,13 @@ class CausalLMBatch(Batch):
     def max_tokens(self):
         max_total_tokens = self.attention_mask.size(1)
         return len(self.requests) * max_total_tokens
+
+    def free_indices(self):
+        used = set(req.idx for req in self.requests)
+        for i in range(self.batch_size):
+            if i in used:
+                continue
+            yield i
 
 
 class CausalLM(Model):
@@ -640,21 +654,21 @@ class CausalLM(Model):
         next_token_ids_cpu = next_token_ids.cpu()
         htorch.core.mark_step()
 
-        for req in batch.requests:
+        for req_idx, req in enumerate(batch.requests):
             i = req.idx
             request = req.data
             input_length = req.input_length
             prefix_offset = req.prefix_offset
             read_offset = req.read_offset
-            do_sample = batch.next_token_chooser.do_sample[i]
-            seed = batch.next_token_chooser.seeds[i]
+            do_sample = batch.next_token_chooser.do_sample[req_idx]
+            seed = batch.next_token_chooser.seeds[req_idx]
             stopping_criteria = req.stopping_criteria
             all_input_ids = req.all_input_ids
-            top_n_tokens = batch.top_n_tokens[i]
+            top_n_tokens = batch.top_n_tokens[req_idx]
             next_token_id = next_token_ids_cpu[i]
             next_token_logprob = next_token_logprobs[i]
-            top_token_ids = batch_top_token_ids[i]
-            top_token_logprobs = batch_top_token_logprobs[i]
+            top_token_ids = batch_top_token_ids[req_idx]
+            top_token_logprobs = batch_top_token_logprobs[req_idx]
 
             # Append next token to all tokens
             if self.is_optimized_for_gaudi:
