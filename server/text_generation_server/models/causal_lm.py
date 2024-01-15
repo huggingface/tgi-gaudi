@@ -389,6 +389,7 @@ class CausalLMBatch(Batch):
     @tracer.start_as_current_span("filter")
     def filter(self, request_ids: List[int], is_optimized_for_gaudi: bool = False) -> Optional["CausalLMBatch"]:
         dbg_trace('FILTER', f'num_reqs:{len(self.requests)} -> {len(request_ids)}')
+        request_ids = set(request_ids)
         self.requests = [req for req in self.requests if req.data.id in request_ids]
         return self.__class__.recombine([self], is_optimized_for_gaudi)
 
