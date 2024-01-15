@@ -390,7 +390,8 @@ class CausalLM(Model):
             padding_side="left",
             truncation_side="left",
         )
-        make_tokenizer_optional(tokenizer)
+        if os.getenv("MAKE_TOKENIZER_OPTIONAL", "true").lower() == "true":
+            make_tokenizer_optional(tokenizer)
 
         model_kwargs = {
             "revision": revision,
