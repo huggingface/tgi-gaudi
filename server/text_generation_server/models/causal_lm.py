@@ -75,7 +75,7 @@ def prepare_memory(new_bs, tensor, inplace):
         return tensor.new_empty((new_bs,) + tensor.shape[1:])
 
 
-def move_data(dst_tensor, chunk_size, indices, src_tensors):
+def move_data(dst_tensor, chunk_size, indices, src_tensors, seq_dim):
     batch_dim = 0
     bs = dst_tensor.size(batch_dim)
     assert bs % chunk_size == 0, 'Batch dim must be divisible by chunk size!'
@@ -88,7 +88,12 @@ def move_data(dst_tensor, chunk_size, indices, src_tensors):
             src_t = src_t.view(bs // chunk_size, chunk_size, *src_t.shape[1:])
         for dst_idx, src_idx in ind:
             src_data = torch.index_select(src_t, batch_dim, src_idx)
-            dst_tensor.index_copy_(batch_dim, dst_idx, src_data)
+            if src_data.size(seq_dim) != dst_tensor.size(seq_dim):
+                # New sequence contains only input and first token. Need to narrow dst tensor
+                dst_tensor_view = torch.narrow(dst_tensor, seq_dim, 0, src_data.size(seq_dim))
+                dst_tensor_view.index_copy_(batch_dim, dst_idx, src_data)
+            else:
+                dst_tensor.index_copy_(batch_dim, dst_idx, src_data)
             htorch.core.mark_step()
     return result
 
@@ -230,38 +235,64 @@ class CausalLMBatch(Batch):
         for b in batches:
             b.past_key_values = list(b.past_key_values)
 
+        # Before prefill there is a space allocated only for first token
+        # Need to add padding to the max total tokens before first decode
+        # After that the padding wouldn't be required, as space will be already allocated for all tokens
+        batch = batches[target_batch_idx]
+        padding_needed = (batch.input_length + batch.right_padding) - batch.seq_length
+        if padding_needed > 0:
+            right_padding = batch.right_padding
+            batch.input_ids = torch.nn.functional.pad(batch.input_ids, (0, batch.right_padding), value=2)
+            batch.attention_mask = torch.nn.functional.pad(batch.attention_mask, (0, batch.right_padding), value=0)
+
+            past_key_values = []
+            past_key_values_type = type(batch.past_key_values)
+            value_padding = (0, 0, 0, batch.right_padding)
+            if key_dim == -1:
+                key_padding = (0, batch.right_padding)
+            else:
+                key_padding = (0, 0, 0, batch.right_padding)
+            for layer_num in range(len(batch.past_key_values)):
+                updated_key = torch.nn.functional.pad(batch.past_key_values[layer_num][0], key_padding, value=0)
+                updated_value = torch.nn.functional.pad(batch.past_key_values[layer_num][1], value_padding, value=0)
+                past_key_values.append((updated_key, updated_value))
+                batch.past_key_values[layer_num] = None
+            batch.past_key_values = past_key_values_type(past_key_values)
+            del past_key_values
+            htorch.core.mark_step()
+
         src = [b.input_ids for b in batches]
         for b in batches:
             del b.input_ids
         src = shift_all(src, seq_dim, offsets)
         input_ids = prepare_memory(new_bs, src[target_batch_idx], inplace)
-        input_ids = move_data(input_ids, 1, indices, src)
+        input_ids = move_data(input_ids, 1, indices, src, seq_dim)
 
         src = [b.attention_mask for b in batches]
         for b in batches:
             del b.attention_mask
         src = shift_all(src, seq_dim, offsets)
         attention_mask = prepare_memory(new_bs, src[target_batch_idx], inplace)
-        attention_mask = move_data(attention_mask, 1, indices, src)
+        attention_mask = move_data(attention_mask, 1, indices, src, seq_dim)
 
         src = [b.position_ids for b in batches]
         for b in batches:
             del b.position_ids
         src = shift_all(src, seq_dim, offsets)
         position_ids = prepare_memory(new_bs, src[target_batch_idx], inplace)
-        position_ids = move_data(position_ids, 1, indices, src)
+        position_ids = move_data(position_ids, 1, indices, src, seq_dim)
 
         past_key_values = []
         for layer_num in range(num_layers):
             src = [b.past_key_values[layer_num][0] for b in batches]
             src = shift_all(src, key_dim, offsets)
             updated_key = prepare_memory(new_bs * chunk_size, src[target_batch_idx], inplace)
-            updated_key = move_data(updated_key, chunk_size, indices, src)
+            updated_key = move_data(updated_key, chunk_size, indices, src, key_dim)
 
             src = [b.past_key_values[layer_num][1] for b in batches]
             src = shift_all(src, value_dim, offsets)
             updated_value = prepare_memory(new_bs * chunk_size, src[target_batch_idx], inplace)
-            updated_value = move_data(updated_value, chunk_size, indices, src)
+            updated_value = move_data(updated_value, chunk_size, indices, src, value_dim)
 
             past_key_values.append((updated_key, updated_value))
             for b in batches:
@@ -351,12 +382,15 @@ class CausalLMBatch(Batch):
         attention_mask = tokenized_inputs["attention_mask"]
 
         if is_optimized_for_gaudi:
+            # Allocate space for first token
             input_ids = torch.nn.functional.pad(
-                input_ids, (0, max_new_tokens + extra_padding), value=tokenizer.pad_token_id
+                input_ids, (0, 1), value=tokenizer.pad_token_id
             )
             attention_mask = torch.nn.functional.pad(
-                attention_mask, (0, max_new_tokens + extra_padding), value=0)
-            all_input_ids = input_ids.T.split(1, dim=1)
+                attention_mask, (0, 1), value=0)
+            all_input_ids = torch.nn.functional.pad(
+                input_ids, (0, max_new_tokens + extra_padding - 1), value=tokenizer.pad_token_id
+            ).T.split(1, dim=1)
         else:
             all_input_ids = input_ids.clone().T.split(1, dim=1)
 
@@ -606,18 +640,22 @@ class CausalLM(Model):
             self.hb_profer_started = False
 
         if self.is_optimized_for_gaudi:
-            token_idx = torch.tensor(batch.attention_mask.shape[-1] - batch.right_padding).to(self.device)
+            if prefill:
+                # no right padding for prefill
+                token_idx = torch.tensor(batch.attention_mask.shape[-1] - 1).to(self.device)
+            else:
+                token_idx = torch.tensor(batch.attention_mask.shape[-1] - batch.right_padding).to(self.device)
             attention_mask = batch.attention_mask
         else:
             token_idx = None
             # slice the attention mask to the correct shape
             # TODO fix me!
             attention_mask = batch.attention_mask[:, : -batch.padding_right_offset]
-        if batch.past_key_values:
+        if prefill:
+            input_ids = batch.input_ids
+        else:
             if token_idx is not None:
                 input_ids = torch.index_select(batch.input_ids, 1, token_idx - 1)
-        else:
-            input_ids = batch.input_ids
 
         logits, past = self.forward(
             input_ids,
