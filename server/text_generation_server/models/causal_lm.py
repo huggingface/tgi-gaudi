@@ -208,8 +208,6 @@ class CausalLMBatch(Batch):
         else:
             free_indices = itertools.count(0)
 
-        # TODO: for now use consecutive indices. This could be optimized to reuse existing batch memory and only overwrite
-        # indices that are no longer used instead of allocating new memory
         to_tensors = lambda ind: (torch.tensor(ind[0], device=device), torch.tensor(ind[1], device=device))
         indices = [[to_tensors(req.update_idx(next(free_indices))) for req in batch_reqs] for batch_reqs in grouped_requests]
 
