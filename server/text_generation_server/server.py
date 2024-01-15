@@ -70,7 +70,7 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
 
     async def Prefill(self, request, context):
         batch = self.model.batch_type.from_pb(
-            request.batch, self.model.tokenizer2, self.model.dtype, self.model.device, self.model.is_optimized_for_gaudi
+            request.batch, self.model.tokenizer, self.model.dtype, self.model.device, self.model.is_optimized_for_gaudi
         )
 
         generations, next_batch = self.model.generate_token(batch)
@@ -116,9 +116,6 @@ def serve(
     uds_path: Path,
     sharded: bool,
 ):
-    import debugpy
-    debugpy.listen(("localhost", 5678))
-    debugpy.wait_for_client()
     # Remove default handler
     logger.remove()
     logger.add(

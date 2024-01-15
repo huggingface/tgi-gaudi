@@ -4,8 +4,10 @@ from text_generation_server.utils.tokens import (
     StoppingCriteria,
     FinishReason,
     batch_top_tokens,
+    make_tokenizer_optional,
+    get_dummy_input
 )
-
+from transformers import AutoTokenizer
 
 def test_stop_sequence_criteria():
     criteria = StopSequenceCriteria("/test;")
@@ -67,35 +69,16 @@ def test_batch_top_tokens():
     assert topn_tok_logprobs[3] == [-1, -2, -3, -3]
     assert topn_tok_logprobs[4] == [-1, -2, -3, -3, -4]
 
-from transformers import PreTrainedTokenizerBase
-class pass_through_tokenizer(PreTrainedTokenizerBase):
-    def __call__(
-        self,
-        text,
-        return_tensors,
-        padding,
-        return_token_type_ids,
-        truncation,
-        max_length
-    ):
-        assert return_tensors=="pt", "inccorrect input arguments when calling pass through tokenizer"
-        assert padding=="max_length","inccorrect input arguments when calling pass through tokenizer"
-        assert return_token_type_ids==False,"inccorrect input arguments when calling pass through tokenizer"
-        assert truncation==True,"inccorrect input arguments when calling pass through tokenizer"
-        all_tokens = [[int(i.strip()) for i in inner_text.split(',')] for inner_text in text]
-        return {"input_ids": torch.tensor([tokens + [2] * (max_length-len(tokens)) for tokens in all_tokens]),
-                "attention_mask": torch.tensor([[0] * (max_length-len(tokens)) + [1]*len(tokens) for tokens in all_tokens])}
-
-
-def get_dummy_input(tokenizer):
-    if type(tokenizer) == pass_through_tokenizer:
-        return "1, 1577"
-    else:
-        return "?"
 
 
 def test_pass_through_tokenizer():
-    tokenizer = pass_through_tokenizer()
+    tokenizer = AutoTokenizer.from_pretrained(
+            'meta-llama/Llama-2-7b-chat-hf',
+            revision=None,
+            padding_side="left",
+            truncation_side="left",
+    )
+    make_tokenizer_optional(tokenizer)
     input = ["1,  1724, 338,  6483,  6509, 29973", get_dummy_input(tokenizer)]
     tokenized_inputs = tokenizer(
         input,
@@ -105,7 +88,11 @@ def test_pass_through_tokenizer():
         truncation=True,
         max_length=1024,
     )
-    print(tokenized_inputs)
+    assert tokenized_inputs['input_ids'].size() == torch.Size([2, 1024])
+    assert torch.equal(tokenized_inputs['input_ids'][0][1018:], torch.tensor([1, 1724, 338, 6483, 6509, 29973]))
+    assert torch.equal(tokenized_inputs['input_ids'][1][1022:], torch.tensor([1, 1577]))
+    decoded_tokens = tokenizer.decode(tokenized_inputs["input_ids"][0], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+
 
 if __name__ == "__main__":
     test_pass_through_tokenizer()

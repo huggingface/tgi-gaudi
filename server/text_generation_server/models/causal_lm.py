@@ -30,7 +30,7 @@ from text_generation_server.models.types import (
     TopTokens,
 )
 from text_generation_server.pb import generate_pb2
-from text_generation_server.utils import HeterogeneousNextTokenChooser, StoppingCriteria, Sampling
+from text_generation_server.utils import HeterogeneousNextTokenChooser, StoppingCriteria, Sampling, get_dummy_input, make_tokenizer_optional, is_tokenizer_transparent
 from loguru import logger
 
 tracer = trace.get_tracer(__name__)
@@ -124,31 +124,6 @@ class CausalLMRequest:
         self.idx = new_idx
         return (new_idx, prev)
 
-
-class pass_through_tokenizer(PreTrainedTokenizerBase):
-    def __call__(
-        self,
-        text,
-        return_tensors,
-        padding,
-        return_token_type_ids,
-        truncation,
-        max_length
-    ):
-        assert return_tensors=="pt", "inccorrect input arguments when calling pass through tokenizer"
-        assert padding=="max_length","inccorrect input arguments when calling pass through tokenizer"
-        assert return_token_type_ids==False,"inccorrect input arguments when calling pass through tokenizer"
-        assert truncation==True,"inccorrect input arguments when calling pass through tokenizer"
-        all_tokens = [[int(i.strip()) for i in inner_text.split(',')] for inner_text in text]
-        return {"input_ids": torch.tensor([[2] * (max_length-len(tokens)) + tokens for tokens in all_tokens]),
-                "attention_mask": torch.tensor([[0] * (max_length-len(tokens)) + [1]*len(tokens) for tokens in all_tokens])}
-
-
-def get_dummy_input(tokenizer):
-    if type(tokenizer) == pass_through_tokenizer:
-        return "1, 1577"
-    else:
-        return "?"
 
 @dataclass
 class CausalLMBatch(Batch):
@@ -415,8 +390,7 @@ class CausalLM(Model):
             padding_side="left",
             truncation_side="left",
         )
-
-        self.tokenizer2 = pass_through_tokenizer()
+        make_tokenizer_optional(tokenizer)
 
         model_kwargs = {
             "revision": revision,
@@ -532,6 +506,19 @@ class CausalLM(Model):
 
     def decode(self, generated_ids: List[int]) -> str:
         return self.tokenizer.decode(generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+
+    def decode_token(
+        self,
+        all_input_ids: List[int],
+        prefix_offset: int = 0,
+        read_offset: int = 0,
+    ) -> Tuple[str, int, int]:
+        if is_tokenizer_transparent(self.tokenizer):
+            new_text = self.tokenizer.decode(all_input_ids[read_offset:], skip_special_tokens=False)
+            return new_text, read_offset, len(all_input_ids)
+        else:
+            return super().decode_token(all_input_ids, prefix_offset, read_offset)
+
 
     def forward(
         self,
