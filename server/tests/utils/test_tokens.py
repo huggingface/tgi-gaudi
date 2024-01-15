@@ -5,7 +5,6 @@ from text_generation_server.utils.tokens import (
     FinishReason,
     batch_top_tokens,
     make_tokenizer_optional,
-    get_dummy_input
 )
 from transformers import AutoTokenizer
 
@@ -78,8 +77,10 @@ def test_pass_through_tokenizer():
             padding_side="left",
             truncation_side="left",
     )
+    tokenizer.pad_token_id = 2
     make_tokenizer_optional(tokenizer)
-    input = ["1,  1724, 338,  6483,  6509, 29973", get_dummy_input(tokenizer)]
+
+    input = ["1,  1724, 338,  6483,  6509, 29973", "?"]
     tokenized_inputs = tokenizer(
         input,
         return_tensors="pt",
@@ -90,8 +91,9 @@ def test_pass_through_tokenizer():
     )
     assert tokenized_inputs['input_ids'].size() == torch.Size([2, 1024])
     assert torch.equal(tokenized_inputs['input_ids'][0][1018:], torch.tensor([1, 1724, 338, 6483, 6509, 29973]))
-    assert torch.equal(tokenized_inputs['input_ids'][1][1022:], torch.tensor([1, 1577]))
+    assert torch.equal(tokenized_inputs['input_ids'][1][1023:], torch.tensor([tokenizer.pad_token_id]))
     decoded_tokens = tokenizer.decode(tokenized_inputs["input_ids"][0], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+    assert decoded_tokens.split(',')[1018:] == ['1', '1724', '338', '6483', '6509', '29973']
 
 
 if __name__ == "__main__":

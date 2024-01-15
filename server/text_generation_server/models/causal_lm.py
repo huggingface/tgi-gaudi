@@ -30,7 +30,7 @@ from text_generation_server.models.types import (
     TopTokens,
 )
 from text_generation_server.pb import generate_pb2
-from text_generation_server.utils import HeterogeneousNextTokenChooser, StoppingCriteria, Sampling, get_dummy_input, make_tokenizer_optional, is_tokenizer_transparent
+from text_generation_server.utils import HeterogeneousNextTokenChooser, StoppingCriteria, Sampling, make_tokenizer_optional, is_tokenizer_transparent
 from loguru import logger
 
 tracer = trace.get_tracer(__name__)
@@ -293,7 +293,7 @@ class CausalLMBatch(Batch):
         # this means that we cannot shift inputs to the left after a long input sequence
         # was filtered out
         new_bs = round_up(len(requests), PREFILL_BATCH_BUCKET_SIZE)
-        dummy_inputs = [get_dummy_input(tokenizer)] * (new_bs - len(requests))
+        dummy_inputs = ["?"] * (new_bs - len(requests))
         tokenized_inputs = tokenizer(
             [r.data.inputs for r in requests] + dummy_inputs,
             return_tensors="pt",

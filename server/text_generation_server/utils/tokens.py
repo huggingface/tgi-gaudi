@@ -377,7 +377,13 @@ def make_tokenizer_optional(tokenizer):
             assert padding == "max_length", "inccorrect input arguments when calling TransparentTokenizer"
             assert return_token_type_ids == False, "inccorrect input arguments when calling TransparentTokenizer"
             assert truncation == True, "inccorrect input arguments when calling TransparentTokenizer"
-            all_tokens = [[int(i.strip()) for i in inner_text.split(',')]
+
+            def str_token_to_int(i):
+                if i == '?':
+                    return tokenizer.pad_token_id
+                else:
+                    return int(i)
+            all_tokens = [[str_token_to_int(i.strip()) for i in inner_text.split(',')]
                           for inner_text in text]
             return {"input_ids": torch.tensor([[2] * (max_length-len(tokens)) + tokens for tokens in all_tokens]),
                     "attention_mask": torch.tensor([[0] * (max_length-len(tokens)) + [1]*len(tokens) for tokens in all_tokens])}
@@ -399,10 +405,3 @@ def make_tokenizer_optional(tokenizer):
 
 def is_tokenizer_transparent(tokenizer):
     return hasattr(tokenizer, "is_transparent") and tokenizer.is_transparent is True
-
-
-def get_dummy_input(tokenizer):
-    if is_tokenizer_transparent(tokenizer):
-        return "1, 1577"
-    else:
-        return "?"
