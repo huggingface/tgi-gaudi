@@ -391,8 +391,10 @@ def make_tokenizer_optional(tokenizer):
         ) -> str:
             return ','.join(str(i) for i in to_py_obj(token_ids))
 
-    tokenizer.__class__ = _
-    tokenizer.is_transparent = True
+    import os
+    if os.getenv("SKIP_TOKENIZER_IN_TGI", "true").lower() == "true":
+        tokenizer.__class__ = _
+        tokenizer.is_transparent = True
 
 
 def is_tokenizer_transparent(tokenizer):
