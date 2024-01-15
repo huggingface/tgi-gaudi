@@ -174,7 +174,7 @@ class CausalLMBatch(Batch):
         )
 
     @classmethod
-    def recombine(cls, batches: List["CausalLMBatch"], is_optimized_for_gaudi: bool = False) -> "CausalLMBatch":
+    def recombine(cls, batches: List["CausalLMBatch"], pad_token_id: int) -> "CausalLMBatch":
         total_requests = sum(len(b) for b in batches)
         new_bs = round_up(total_requests, BATCH_BUCKET_SIZE)
         batch_id = batches[0].batch_id
@@ -216,10 +216,6 @@ class CausalLMBatch(Batch):
         to_tensors = lambda ind: (torch.tensor(ind[0], device=device), torch.tensor(ind[1], device=device))
         indices = [[to_tensors(req.update_idx(next(free_indices))) for req in batch_reqs] for batch_reqs in grouped_requests]
 
-        max_seq_len = batches[0].attention_mask.size(1)
-        input_length = max_input_length
-        right_padding = max_seq_len - input_length
-
         chunk_size = batches[0].past_key_values[0][0].size(0) // batches[0].batch_size
         num_layers = len(batches[0].past_key_values)
         past_key_values_type = type(batches[0].past_key_values)
@@ -235,31 +231,32 @@ class CausalLMBatch(Batch):
         for b in batches:
             b.past_key_values = list(b.past_key_values)
 
-        # Before prefill there is a space allocated only for first token
+        # For prefill there is a space allocated only for first token
         # Need to add padding to the max total tokens before first decode
-        # After that the padding wouldn't be required, as space will be already allocated for all tokens
-        batch = batches[target_batch_idx]
-        padding_needed = (batch.input_length + batch.right_padding) - batch.seq_length
-        if padding_needed > 0:
-            right_padding = batch.right_padding
-            batch.input_ids = torch.nn.functional.pad(batch.input_ids, (0, batch.right_padding), value=2)
-            batch.attention_mask = torch.nn.functional.pad(batch.attention_mask, (0, batch.right_padding), value=0)
+        for batch in batches:
+            padding_needed = (batch.input_length + batch.right_padding) - batch.seq_length
+            if padding_needed > 0:
+                batch.input_ids = torch.nn.functional.pad(batch.input_ids, (0, batch.right_padding), value=pad_token_id)
+                batch.attention_mask = torch.nn.functional.pad(batch.attention_mask, (0, batch.right_padding), value=0)
 
-            past_key_values = []
-            past_key_values_type = type(batch.past_key_values)
-            value_padding = (0, 0, 0, batch.right_padding)
-            if key_dim == -1:
-                key_padding = (0, batch.right_padding)
-            else:
-                key_padding = (0, 0, 0, batch.right_padding)
-            for layer_num in range(len(batch.past_key_values)):
-                updated_key = torch.nn.functional.pad(batch.past_key_values[layer_num][0], key_padding, value=0)
-                updated_value = torch.nn.functional.pad(batch.past_key_values[layer_num][1], value_padding, value=0)
-                past_key_values.append((updated_key, updated_value))
-                batch.past_key_values[layer_num] = None
-            batch.past_key_values = past_key_values_type(past_key_values)
-            del past_key_values
-            htorch.core.mark_step()
+                past_key_values = []
+                value_padding = (0, 0, 0, batch.right_padding)
+                if key_dim == -1:
+                    key_padding = (0, batch.right_padding)
+                else:
+                    key_padding = (0, 0, 0, batch.right_padding)
+                for layer_num in range(len(batch.past_key_values)):
+                    updated_key = torch.nn.functional.pad(batch.past_key_values[layer_num][0], key_padding, value=0)
+                    updated_value = torch.nn.functional.pad(batch.past_key_values[layer_num][1], value_padding, value=0)
+                    past_key_values.append((updated_key, updated_value))
+                    batch.past_key_values[layer_num] = None
+                batch.past_key_values = past_key_values
+                del past_key_values
+                htorch.core.mark_step()
+
+        max_seq_len = batches[0].seq_length
+        input_length = max_input_length
+        right_padding = max_seq_len - input_length
 
         src = [b.input_ids for b in batches]
         for b in batches:
@@ -387,7 +384,8 @@ class CausalLMBatch(Batch):
                 input_ids, (0, 1), value=tokenizer.pad_token_id
             )
             attention_mask = torch.nn.functional.pad(
-                attention_mask, (0, 1), value=0)
+                attention_mask, (0, 1), value=0
+            )
             all_input_ids = torch.nn.functional.pad(
                 input_ids, (0, max_new_tokens + extra_padding - 1), value=tokenizer.pad_token_id
             ).T.split(1, dim=1)
@@ -419,16 +417,16 @@ class CausalLMBatch(Batch):
         )
 
     @tracer.start_as_current_span("filter")
-    def filter(self, request_ids: List[int], is_optimized_for_gaudi: bool = False) -> Optional["CausalLMBatch"]:
+    def filter(self, request_ids: List[int], pad_token_id: int = 0) -> Optional["CausalLMBatch"]:
         dbg_trace('FILTER', f'num_reqs:{len(self.requests)} -> {len(request_ids)}')
         request_ids = set(request_ids)
         self.requests = [req for req in self.requests if req.data.id in request_ids]
-        return self.__class__.recombine([self], is_optimized_for_gaudi)
+        return self.__class__.recombine([self], pad_token_id)
 
     @classmethod
     @tracer.start_as_current_span("concatenate")
-    def concatenate(cls, batches: List["CausalLMBatch"], is_optimized_for_gaudi: bool = False) -> "CausalLMBatch":
-        return cls.recombine(batches, is_optimized_for_gaudi)
+    def concatenate(cls, batches: List["CausalLMBatch"], pad_token_id: int = 0) -> "CausalLMBatch":
+        return cls.recombine(batches, pad_token_id)
 
     def __len__(self):
         return len(self.requests)
@@ -630,7 +628,7 @@ class CausalLM(Model):
         prefill = batch.past_key_values is None
         # Check if we need to do any bookkeeping first
         if not prefill:
-            batch = batch.__class__.recombine([batch], self.is_optimized_for_gaudi)
+            batch = batch.__class__.recombine([batch], self.tokenizer.pad_token_id)
 
         scenario = 'PREFILL' if prefill else 'GENERATE'
         dbg_trace(scenario, f'bs:{batch.batch_size} num_reqs:{len(batch.requests)} seq_len:{batch.seq_length}')
@@ -651,11 +649,11 @@ class CausalLM(Model):
             # slice the attention mask to the correct shape
             # TODO fix me!
             attention_mask = batch.attention_mask[:, : -batch.padding_right_offset]
-        if prefill:
-            input_ids = batch.input_ids
+
+        if not prefill and token_idx is not None:
+            input_ids = torch.index_select(batch.input_ids, 1, token_idx - 1)
         else:
-            if token_idx is not None:
-                input_ids = torch.index_select(batch.input_ids, 1, token_idx - 1)
+            input_ids = batch.input_ids
 
         logits, past = self.forward(
             input_ids,
