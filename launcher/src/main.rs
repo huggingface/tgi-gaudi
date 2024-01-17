@@ -596,8 +596,7 @@ fn shard_manager(
 
         // We received a shutdown signal
         if shutdown.load(Ordering::SeqCst) {
-            p.kill().unwrap();
-            let _ = p.wait();
+            terminate("Shard", p, Duration::from_secs(30)).unwrap();
             tracing::info!("Shard terminated");
             return;
         }
@@ -928,7 +927,7 @@ fn spawn_shards(
     drop(shutdown_sender);
 
     // Wait for shard to start
-   let mut shard_ready = 0;
+    let mut shard_ready = 0;
     while running.load(Ordering::SeqCst) {
         match status_receiver.try_recv() {
             Ok(ShardStatus::Ready) => {
