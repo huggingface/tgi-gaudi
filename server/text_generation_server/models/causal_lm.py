@@ -75,7 +75,7 @@ def prepare_memory(new_bs, tensor, inplace):
         return tensor.new_empty((new_bs,) + tensor.shape[1:])
 
 
-def move_data(dst_tensor, chunk_size, indices, src_tensors, seq_dim):
+def move_data(dst_tensor, chunk_size, indices, src_tensors):
     batch_dim = 0
     bs = dst_tensor.size(batch_dim)
     assert bs % chunk_size == 0, 'Batch dim must be divisible by chunk size!'
@@ -88,12 +88,7 @@ def move_data(dst_tensor, chunk_size, indices, src_tensors, seq_dim):
             src_t = src_t.view(bs // chunk_size, chunk_size, *src_t.shape[1:])
         for dst_idx, src_idx in ind:
             src_data = torch.index_select(src_t, batch_dim, src_idx)
-            if src_data.size(seq_dim) != dst_tensor.size(seq_dim):
-                # New sequence contains only input and first token. Need to narrow dst tensor
-                dst_tensor_view = torch.narrow(dst_tensor, seq_dim, 0, src_data.size(seq_dim))
-                dst_tensor_view.index_copy_(batch_dim, dst_idx, src_data)
-            else:
-                dst_tensor.index_copy_(batch_dim, dst_idx, src_data)
+            dst_tensor.index_copy_(batch_dim, dst_idx, src_data)
             htorch.core.mark_step()
     return result
 
@@ -263,33 +258,33 @@ class CausalLMBatch(Batch):
             del b.input_ids
         src = shift_all(src, seq_dim, offsets)
         input_ids = prepare_memory(new_bs, src[target_batch_idx], inplace)
-        input_ids = move_data(input_ids, 1, indices, src, seq_dim)
+        input_ids = move_data(input_ids, 1, indices, src)
 
         src = [b.attention_mask for b in batches]
         for b in batches:
             del b.attention_mask
         src = shift_all(src, seq_dim, offsets)
         attention_mask = prepare_memory(new_bs, src[target_batch_idx], inplace)
-        attention_mask = move_data(attention_mask, 1, indices, src, seq_dim)
+        attention_mask = move_data(attention_mask, 1, indices, src)
 
         src = [b.position_ids for b in batches]
         for b in batches:
             del b.position_ids
         src = shift_all(src, seq_dim, offsets)
         position_ids = prepare_memory(new_bs, src[target_batch_idx], inplace)
-        position_ids = move_data(position_ids, 1, indices, src, seq_dim)
+        position_ids = move_data(position_ids, 1, indices, src)
 
         past_key_values = []
         for layer_num in range(num_layers):
             src = [b.past_key_values[layer_num][0] for b in batches]
             src = shift_all(src, key_dim, offsets)
             updated_key = prepare_memory(new_bs * chunk_size, src[target_batch_idx], inplace)
-            updated_key = move_data(updated_key, chunk_size, indices, src, key_dim)
+            updated_key = move_data(updated_key, chunk_size, indices, src)
 
             src = [b.past_key_values[layer_num][1] for b in batches]
             src = shift_all(src, value_dim, offsets)
             updated_value = prepare_memory(new_bs * chunk_size, src[target_batch_idx], inplace)
-            updated_value = move_data(updated_value, chunk_size, indices, src, value_dim)
+            updated_value = move_data(updated_value, chunk_size, indices, src)
 
             past_key_values.append((updated_key, updated_value))
             for b in batches:
