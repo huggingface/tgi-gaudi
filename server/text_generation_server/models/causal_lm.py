@@ -105,7 +105,12 @@ def shift(tensor, dim, offset):
     target_shape = [1,] * len(tensor.shape)
     target_shape[dim] = elements
     indices = indices.view(target_shape).expand(shape)
+    is_fp8 = tensor.dtype == torch.float8_e4m3fn
+    if is_fp8:
+        tensor = tensor.to(torch.bfloat16)
     result = torch.gather(tensor, dim, indices)
+    if is_fp8:
+        result = result.to(torch.float8_e4m3fn)
     htorch.core.mark_step()
     return result
 
