@@ -117,7 +117,7 @@ def shift_all(srcs, dim, offsets):
 def pad_tensors(tensors, paddings, dim, value):
     for i, (tensor, padding) in enumerate(zip(tensors, paddings)):
         if padding > 0:
-            pad_shape = (0, padding) if dim == -1 else (0, 0, 0, padding)
+            pad_shape = (0, 0, 0, padding) if dim == -2 else (0, padding)
             tensors[i] = torch.nn.functional.pad(tensor, pad_shape, value=value)
             htorch.core.mark_step()
     return tensors
