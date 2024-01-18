@@ -114,6 +114,15 @@ def shift_all(srcs, dim, offsets):
     return [shift(src, dim, offset) for src, offset in zip(srcs, offsets)]
 
 
+def pad_tensors(tensors, paddings, dim, value):
+    for i, (tensor, padding) in enumerate(zip(tensors, paddings)):
+        if padding > 0:
+            pad_shape = (0, padding) if dim == -1 else (0, 0, 0, padding)
+            tensors[i] = torch.nn.functional.pad(tensor, pad_shape, value=value)
+            htorch.core.mark_step()
+    return tensors
+
+
 @dataclass
 class CausalLMRequest:
     idx: int
@@ -228,34 +237,12 @@ class CausalLMBatch(Batch):
 
         # For prefill there is a space allocated only for first token
         # Need to add padding to the max total tokens before first decode
-        for batch in batches:
-            padding_needed = (batch.input_length + batch.right_padding) - batch.seq_length
-            if padding_needed > 0:
-                batch.input_ids = torch.nn.functional.pad(batch.input_ids, (0, batch.right_padding), value=pad_token_id)
-                batch.attention_mask = torch.nn.functional.pad(batch.attention_mask, (0, batch.right_padding), value=0)
-
-                past_key_values = []
-                value_padding = (0, 0, 0, batch.right_padding)
-                if key_dim == -1:
-                    key_padding = (0, batch.right_padding)
-                else:
-                    key_padding = (0, 0, 0, batch.right_padding)
-                for layer_num in range(len(batch.past_key_values)):
-                    updated_key = torch.nn.functional.pad(batch.past_key_values[layer_num][0], key_padding, value=0)
-                    updated_value = torch.nn.functional.pad(batch.past_key_values[layer_num][1], value_padding, value=0)
-                    past_key_values.append((updated_key, updated_value))
-                    batch.past_key_values[layer_num] = None
-                batch.past_key_values = past_key_values
-                del past_key_values
-                htorch.core.mark_step()
-
-        max_seq_len = batches[0].seq_length
-        input_length = max_input_length
-        right_padding = max_seq_len - input_length
+        paddings = [(batch.input_length + batch.right_padding) - batch.seq_length for batch in batches]
 
         src = [b.input_ids for b in batches]
         for b in batches:
             del b.input_ids
+        src = pad_tensors(src, paddings, seq_dim, pad_token_id)
         src = shift_all(src, seq_dim, offsets)
         input_ids = prepare_memory(new_bs, src[target_batch_idx], inplace)
         input_ids = move_data(input_ids, 1, indices, src)
@@ -263,6 +250,7 @@ class CausalLMBatch(Batch):
         src = [b.attention_mask for b in batches]
         for b in batches:
             del b.attention_mask
+        src = pad_tensors(src, paddings, seq_dim, 0)
         src = shift_all(src, seq_dim, offsets)
         attention_mask = prepare_memory(new_bs, src[target_batch_idx], inplace)
         attention_mask = move_data(attention_mask, 1, indices, src)
@@ -277,11 +265,13 @@ class CausalLMBatch(Batch):
         past_key_values = []
         for layer_num in range(num_layers):
             src = [b.past_key_values[layer_num][0] for b in batches]
+            src = pad_tensors(src, paddings, key_dim, 0)
             src = shift_all(src, key_dim, offsets)
             updated_key = prepare_memory(new_bs * chunk_size, src[target_batch_idx], inplace)
             updated_key = move_data(updated_key, chunk_size, indices, src)
 
             src = [b.past_key_values[layer_num][1] for b in batches]
+            src = pad_tensors(src, paddings, value_dim, 0)
             src = shift_all(src, value_dim, offsets)
             updated_value = prepare_memory(new_bs * chunk_size, src[target_batch_idx], inplace)
             updated_value = move_data(updated_value, chunk_size, indices, src)
@@ -299,6 +289,10 @@ class CausalLMBatch(Batch):
             batches[0].next_token_chooser.device,
             batches[0].next_token_chooser.dtype
         )
+
+        max_seq_len = attention_mask.size(1)
+        input_length = max_input_length
+        right_padding = max_seq_len - input_length
 
         htorch.core.mark_step()
 
