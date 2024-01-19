@@ -273,8 +273,8 @@ class CausalLMBatch(Batch):
         top_n_tokens_tensor = torch.tensor(top_n_tokens, device=device, dtype=torch.int64)
         next_token_chooser = HeterogeneousNextTokenChooser.from_pb(
             [r.data.parameters for r in flat_requests],
-            batches[0].next_token_chooser.device,
-            batches[0].next_token_chooser.dtype
+            batches[0].next_token_chooser.dtype,
+            batches[0].next_token_chooser.device
         )
 
         htorch.core.mark_step()
