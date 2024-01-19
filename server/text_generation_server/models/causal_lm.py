@@ -575,7 +575,8 @@ class CausalLM(Model):
 
         print("Initializing inference with quantization")
         _mark_params_as_const(model)
-        _check_params_as_const(model)
+        # TODO: the function below produces an error when TGI is run on 8 cards with --dtype float8 - find out why and check if we need it at all
+        # _check_params_as_const(model)
 
         hpu.enable_quantization()
         htcore.hpu_initialize(model)
