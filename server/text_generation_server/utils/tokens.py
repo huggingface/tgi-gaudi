@@ -385,8 +385,8 @@ def make_tokenizer_optional(tokenizer):
                     return int(i)
             all_tokens = [[str_token_to_int(i.strip()) for i in inner_text.split(',')]
                           for inner_text in text]
-            return {"input_ids": torch.tensor([[tokenizer.pad_token_id] * (max_length-len(tokens)) + tokens for tokens in all_tokens]),
-                    "attention_mask": torch.tensor([[0] * (max_length-len(tokens)) + [1]*len(tokens) for tokens in all_tokens])}
+            return {"input_ids": torch.tensor([[tokenizer.pad_token_id] * (max_length-len(tokens)) + tokens for tokens in all_tokens], dtype=torch.int64),
+                    "attention_mask": torch.tensor([[0] * (max_length-len(tokens)) + [1]*len(tokens) for tokens in all_tokens], dtype=torch.int64)}
 
         def decode(
             self,
@@ -398,7 +398,7 @@ def make_tokenizer_optional(tokenizer):
             return ','.join(str(i) for i in to_py_obj(token_ids))
 
     import os
-    if os.getenv("SKIP_TOKENIZER_IN_TGI", "false").lower() == "true":
+    if os.getenv("SKIP_TOKENIZER_IN_TGI", "true").lower() == "true":
         tokenizer.__class__ = _
         tokenizer.is_transparent = True
 
