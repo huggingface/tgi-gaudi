@@ -66,14 +66,46 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
 
     async def Warmup(self, request, context):
         with self.profiler.record_event("external", "warmup"):
-            # batch = self.model.batch_type.from_pb(
-            #     request.batch, self.model.tokenizer, self.model.dtype, self.model.device
-            # )
-            # max_supported_total_tokens = self.model.warmup(batch)
+            #First batch
+            import debugpy
+            debugpy.listen(3033)
+            debugpy.wait_for_client()
+            batch1 = self.model.batch_type.from_pb(
+                request.batch, self.model.tokenizer, self.model.dtype, self.model.device, self.model.is_optimized_for_gaudi
+            )
+            #Prefill 1
+            _, next_batch = self.model.generate_token(batch1)
+            self.cache.set(next_batch)
+            #Decode
+            batch = self.cache.pop(0)
+            _, next_batch = self.model.generate_token(batch)
+            self.cache.set(next_batch)
+            #Decode
+            batch = self.cache.pop(0)
+            _, next_batch = self.model.generate_token(batch)
+            self.cache.set(next_batch)
+            #Second batch
+            batch2 = self.model.batch_type.from_pb(
+                request.batch, self.model.tokenizer, self.model.dtype, self.model.device, self.model.is_optimized_for_gaudi
+            )
+            #Prefill 2
+            _, next_batch = self.model.generate_token(batch2)
+            self.cache.set(next_batch)
+            #Concat
+            batches = []
+            for batch_pb in request.batches:
+                batch = self.cache.pop(batch_pb.id)
+                batches.append(batch)
+            batch = self.model.batch_type.concatenate(batches, self.model.is_optimized_for_gaudi)
+            #Decode
+            _, next_batch = self.model.generate_token(batch)
+            self.cache.set(next_batch)
+            #Filter 1
+            filtered_batch = batch.filter(request.request_ids, self.model.is_optimized_for_gaudi)
+            #Decode
+            _, next_batch = self.model.generate_token(filtered_batch)
+            self.cache.set(next_batch)
 
-            # return generate_pb2.WarmupResponse(
-            #     max_supported_total_tokens=max_supported_total_tokens
-            # )
             logger.warning("Warmup is not enabled on HPU.")
             return generate_pb2.WarmupResponse()
 

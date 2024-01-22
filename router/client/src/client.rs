@@ -117,14 +117,14 @@ impl Client {
                 truncate,
                 // Set sampling parameters to also take these ops into account in the max memory
                 parameters: Some(NextTokenChooserParameters {
-                    temperature: 0.9,
-                    top_k: 10,
-                    top_p: 0.9,
-                    typical_p: 0.9,
+                    temperature: 1.0,
+                    top_k: 0,
+                    top_p: 1.0,
+                    typical_p: 1.0,
                     do_sample: false,
                     seed: 0,
-                    repetition_penalty: 1.2,
-                    watermark: true,
+                    repetition_penalty: 1.0,
+                    watermark: false,
                 }),
                 stopping_parameters: Some(StoppingCriteriaParameters {
                     max_new_tokens: max_total_tokens - truncate,
