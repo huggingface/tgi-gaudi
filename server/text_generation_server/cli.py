@@ -21,6 +21,7 @@ class Quantization(str, Enum):
 class Dtype(str, Enum):
     float16 = "float16"
     bloat16 = "bfloat16"
+    float8 = "float8"
 
 
 @app.command()
@@ -64,6 +65,15 @@ def serve(
     # Downgrade enum into str for easier management later on
     quantize = None if quantize is None else quantize.value
     dtype = "bfloat16" if dtype is None else dtype.value
+    if dtype == "float8":
+        os.environ.setdefault("ENABLE_EXPERIMENTAL_FLAGS", "true")
+        os.environ.setdefault("USE_DEFAULT_QUANT_PARAM", "true")
+        os.environ.setdefault("UPDATE_GRAPH_OUTPUT_MME", "false")
+        os.environ.setdefault("ENABLE_CALC_DYNAMIC_RANGE", "false")
+        os.environ.setdefault(
+            "UPDATE_MME_OUTPUT_PRECISION_FILTER", "v_proj,matmul_av")
+        import habana_frameworks.torch.core as htcore
+        htcore.hpu_set_env()
 
     logger.info("CLI SHARDED = {} DTYPE = {}".format(sharded, dtype))
 
