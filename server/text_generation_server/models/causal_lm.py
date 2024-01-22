@@ -32,8 +32,10 @@ from text_generation_server.models.types import (
     TopTokens,
 )
 from text_generation_server.pb import generate_pb2
-from text_generation_server.utils import HeterogeneousNextTokenChooser, StoppingCriteria, Sampling
+from text_generation_server.utils import HeterogeneousNextTokenChooser, StoppingCriteria, Sampling, make_tokenizer_optional, is_tokenizer_transparent
 from loguru import logger
+from functools import wraps
+
 
 tracer = trace.get_tracer(__name__)
 
@@ -119,6 +121,36 @@ def shift_all(srcs, dim, offsets):
     return [shift(src, dim, offset) for src, offset in zip(srcs, offsets)]
 
 
+def remove_kv_cache_from_output(module):
+    orig_fwd = module.forward
+
+    @wraps(orig_fwd)
+    def forward(*args, **kwargs):
+        if kwargs["past_key_values"] is not None:
+            kwargs["return_dict"] = False
+            output = orig_fwd(*args, **kwargs)
+            first_value, second_value, *_ = output
+            if first_value.nelement() < 2:
+                return second_value
+            else:
+                return first_value
+        else:
+            kwargs["return_dict"] = True
+            return orig_fwd(*args, **kwargs)
+
+    module.forward = forward
+    return module
+
+
+def pad_tensors(tensors, paddings, dim, value):
+    for i, (tensor, padding) in enumerate(zip(tensors, paddings)):
+        if padding > 0:
+            pad_shape = (0, 0, 0, padding) if dim == -2 else (0, padding)
+            tensors[i] = torch.nn.functional.pad(tensor, pad_shape, value=value)
+            htorch.core.mark_step()
+    return tensors
+
+
 @dataclass
 class CausalLMRequest:
     idx: int
@@ -145,6 +177,7 @@ class CausalLMRequest:
         prev = self.idx
         self.idx = new_idx
         return (new_idx, prev)
+
 
 @dataclass
 class CausalLMBatch(Batch):
@@ -174,7 +207,7 @@ class CausalLMBatch(Batch):
         )
 
     @classmethod
-    def recombine(cls, batches: List["CausalLMBatch"], is_optimized_for_gaudi: bool = False) -> "CausalLMBatch":
+    def recombine(cls, batches: List["CausalLMBatch"], pad_token_id: int) -> "CausalLMBatch":
         total_requests = sum(len(b) for b in batches)
         new_bs = round_up(total_requests, BATCH_BUCKET_SIZE)
         batch_id = batches[0].batch_id
@@ -216,10 +249,6 @@ class CausalLMBatch(Batch):
         to_tensors = lambda ind: (torch.tensor(ind[0], device=device), torch.tensor(ind[1], device=device))
         indices = [[to_tensors(req.update_idx(next(free_indices))) for req in batch_reqs] for batch_reqs in grouped_requests]
 
-        max_seq_len = batches[0].attention_mask.size(1)
-        input_length = max_input_length
-        right_padding = max_seq_len - input_length
-
         chunk_size = batches[0].past_key_values[0][0].size(0) // batches[0].batch_size
         num_layers = len(batches[0].past_key_values)
         past_key_values_type = type(batches[0].past_key_values)
@@ -235,9 +264,14 @@ class CausalLMBatch(Batch):
         for b in batches:
             b.past_key_values = list(b.past_key_values)
 
+        # For prefill there is a space allocated only for first token
+        # Need to add padding to the max total tokens before first decode
+        paddings = [(batch.input_length + batch.right_padding) - batch.seq_length for batch in batches]
+
         src = [b.input_ids for b in batches]
         for b in batches:
             del b.input_ids
+        src = pad_tensors(src, paddings, seq_dim, pad_token_id)
         src = shift_all(src, seq_dim, offsets)
         input_ids = prepare_memory(new_bs, src[target_batch_idx], inplace)
         input_ids = move_data(input_ids, 1, indices, src)
@@ -245,6 +279,7 @@ class CausalLMBatch(Batch):
         src = [b.attention_mask for b in batches]
         for b in batches:
             del b.attention_mask
+        src = pad_tensors(src, paddings, seq_dim, 0)
         src = shift_all(src, seq_dim, offsets)
         attention_mask = prepare_memory(new_bs, src[target_batch_idx], inplace)
         attention_mask = move_data(attention_mask, 1, indices, src)
@@ -259,11 +294,13 @@ class CausalLMBatch(Batch):
         past_key_values = []
         for layer_num in range(num_layers):
             src = [b.past_key_values[layer_num][0] for b in batches]
+            src = pad_tensors(src, paddings, key_dim, 0)
             src = shift_all(src, key_dim, offsets)
             updated_key = prepare_memory(new_bs * chunk_size, src[target_batch_idx], inplace)
             updated_key = move_data(updated_key, chunk_size, indices, src)
 
             src = [b.past_key_values[layer_num][1] for b in batches]
+            src = pad_tensors(src, paddings, value_dim, 0)
             src = shift_all(src, value_dim, offsets)
             updated_value = prepare_memory(new_bs * chunk_size, src[target_batch_idx], inplace)
             updated_value = move_data(updated_value, chunk_size, indices, src)
@@ -281,6 +318,10 @@ class CausalLMBatch(Batch):
             batches[0].next_token_chooser.device,
             batches[0].next_token_chooser.dtype
         )
+
+        max_seq_len = attention_mask.size(1)
+        input_length = max_input_length
+        right_padding = max_seq_len - input_length
 
         htorch.core.mark_step()
 
@@ -356,12 +397,16 @@ class CausalLMBatch(Batch):
         attention_mask = tokenized_inputs["attention_mask"]
 
         if is_optimized_for_gaudi:
+            # Allocate space for first token
             input_ids = torch.nn.functional.pad(
-                input_ids, (0, max_new_tokens + extra_padding), value=tokenizer.pad_token_id
+                input_ids, (0, 1), value=tokenizer.pad_token_id
             )
             attention_mask = torch.nn.functional.pad(
-                attention_mask, (0, max_new_tokens + extra_padding), value=0)
-            all_input_ids = input_ids.T.split(1, dim=1)
+                attention_mask, (0, 1), value=0
+            )
+            all_input_ids = torch.nn.functional.pad(
+                input_ids, (0, max_new_tokens + extra_padding - 1), value=tokenizer.pad_token_id
+            ).T.split(1, dim=1)
         else:
             all_input_ids = input_ids.clone().T.split(1, dim=1)
 
@@ -390,16 +435,16 @@ class CausalLMBatch(Batch):
         )
 
     @tracer.start_as_current_span("filter")
-    def filter(self, request_ids: List[int], is_optimized_for_gaudi: bool = False) -> Optional["CausalLMBatch"]:
+    def filter(self, request_ids: List[int], pad_token_id: int = 0) -> Optional["CausalLMBatch"]:
         dbg_trace('FILTER', f'num_reqs:{len(self.requests)} -> {len(request_ids)}')
         request_ids = set(request_ids)
         self.requests = [req for req in self.requests if req.data.id in request_ids]
-        return self.__class__.recombine([self], is_optimized_for_gaudi)
+        return self.__class__.recombine([self], pad_token_id)
 
     @classmethod
     @tracer.start_as_current_span("concatenate")
-    def concatenate(cls, batches: List["CausalLMBatch"], is_optimized_for_gaudi: bool = False) -> "CausalLMBatch":
-        return cls.recombine(batches, is_optimized_for_gaudi)
+    def concatenate(cls, batches: List["CausalLMBatch"], pad_token_id: int = 0) -> "CausalLMBatch":
+        return cls.recombine(batches, pad_token_id)
 
     def __len__(self):
         return len(self.requests)
@@ -452,6 +497,7 @@ class CausalLM(Model):
             padding_side="left",
             truncation_side="left",
         )
+        make_tokenizer_optional(tokenizer)
 
         model_kwargs = {
             "revision": revision,
@@ -493,7 +539,8 @@ class CausalLM(Model):
             # Initialize the model
             ds_inference_kwargs = {"dtype": dtype}
             ds_inference_kwargs["tensor_parallel"] = {"tp_size": world_size}
-            ds_inference_kwargs["enable_cuda_graph"] = self.enable_hpu_graph
+            ds_inference_kwargs["enable_cuda_graph"] = False
+
 
             if load_to_meta:
                 # model loaded to meta is managed differently
@@ -502,6 +549,10 @@ class CausalLM(Model):
                 ds_inference_kwargs["checkpoint"] = checkpoints_json.name
             model = deepspeed.init_inference(model, **ds_inference_kwargs)
             model = model.module
+            model = remove_kv_cache_from_output(model)
+            if self.enable_hpu_graph:
+                model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
+
         else:
             get_repo_root(model_id)
             model = AutoModelForCausalLM.from_pretrained(
@@ -511,6 +562,7 @@ class CausalLM(Model):
             )
             model = model.eval().to(device)
             #wrap in hpu_graph only if self.enable_hpu_graph is set
+            model = remove_kv_cache_from_output(model)
             if self.enable_hpu_graph:
                 model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
 
@@ -585,6 +637,19 @@ class CausalLM(Model):
     def decode(self, generated_ids: List[int]) -> str:
         return self.tokenizer.decode(generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
 
+    def decode_token(
+        self,
+        all_input_ids: List[int],
+        prefix_offset: int = 0,
+        read_offset: int = 0,
+    ) -> Tuple[str, int, int]:
+        if is_tokenizer_transparent(self.tokenizer):
+            new_text = self.tokenizer.decode(all_input_ids[read_offset:], skip_special_tokens=False)
+            return new_text, read_offset, len(all_input_ids)
+        else:
+            return super().decode_token(all_input_ids, prefix_offset, read_offset)
+
+
     def forward(
         self,
         input_ids,
@@ -612,15 +677,18 @@ class CausalLM(Model):
             kwargs["bypass_hpu_graphs"] = bypass_hpu_graph
 
         kwargs.update(self.kwargs)
-        outputs = self.model.forward(**kwargs)
-        return outputs.logits, outputs.past_key_values
+        if past_key_values is not None:
+            return self.model.forward(**kwargs)
+        else:
+            outputs = self.model.forward(**kwargs)
+            return outputs.logits, outputs.past_key_values
 
     @tracer.start_as_current_span("generate_token")
     def generate_token(self, batch: CausalLMBatch) -> Tuple[List[Generation], Optional[CausalLMBatch]]:
         prefill = batch.past_key_values is None
         # Check if we need to do any bookkeeping first
         if not prefill:
-            batch = batch.__class__.recombine([batch], self.is_optimized_for_gaudi)
+            batch = batch.__class__.recombine([batch], self.tokenizer.pad_token_id)
 
         scenario = 'PREFILL' if prefill else 'GENERATE'
         dbg_trace(scenario, f'bs:{batch.batch_size} num_reqs:{len(batch.requests)} seq_len:{batch.seq_length}')
@@ -630,27 +698,41 @@ class CausalLM(Model):
             self.hb_profer_started = False
 
         if self.is_optimized_for_gaudi:
-            token_idx = torch.tensor(batch.attention_mask.shape[-1] - batch.right_padding).to(self.device)
+            if prefill:
+                # no right padding for prefill
+                token_idx = torch.tensor(batch.attention_mask.shape[-1] - 1).to(self.device)
+            else:
+                token_idx = torch.tensor(batch.attention_mask.shape[-1] - batch.right_padding).to(self.device)
             attention_mask = batch.attention_mask
         else:
             token_idx = None
             # slice the attention mask to the correct shape
             # TODO fix me!
             attention_mask = batch.attention_mask[:, : -batch.padding_right_offset]
-        if batch.past_key_values:
-            if token_idx is not None:
-                input_ids = torch.index_select(batch.input_ids, 1, token_idx - 1)
+
+        if not prefill and token_idx is not None:
+            input_ids = torch.index_select(batch.input_ids, 1, token_idx - 1)
         else:
             input_ids = batch.input_ids
 
-        logits, past = self.forward(
-            input_ids,
-            attention_mask,
-            batch.position_ids,
-            token_idx,
-            batch.past_key_values,
-            bypass_hpu_graph = prefill and self.limit_hpu_graph if self.enable_hpu_graph else None
-        )
+        if prefill:
+            logits, past = self.forward(
+                input_ids,
+                attention_mask,
+                batch.position_ids,
+                token_idx,
+                batch.past_key_values,
+                bypass_hpu_graph = prefill and self.limit_hpu_graph if self.enable_hpu_graph else None
+            )
+        else:
+            logits = self.forward(
+                input_ids,
+                attention_mask,
+                batch.position_ids,
+                token_idx,
+                batch.past_key_values,
+                bypass_hpu_graph = prefill and self.limit_hpu_graph if self.enable_hpu_graph else None
+            )
 
         # Results
         generations: List[Generation] = []
@@ -813,7 +895,9 @@ class CausalLM(Model):
         else:
             batch.position_ids += 1
         # Update past key values
-        batch.past_key_values = past
+        if prefill:
+            batch.past_key_values = past
+
         if self.hb_profer_started == True:
             self.hb_profer.step()
         htorch.core.mark_step()
