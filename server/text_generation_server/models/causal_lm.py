@@ -101,9 +101,12 @@ def shift(tensor, dim, offset):
     if offset == 0 or abs(offset) > elements:
         return tensor
     htorch.core.mark_step()
+    # We generate indices from (0 - offset + elements) to (elements - offset + elements)
+    # so that next modulo operation operates on positive values
     indices = torch.arange(0, elements, dtype=torch.int32, device=tensor.device)
-    offset = torch.tensor(offset, dtype=torch.int32, device=tensor.device)
-    indices = torch.clamp(indices - offset, 0, elements - 1)
+    offset = torch.tensor(-offset + elements, dtype=torch.int32, device=tensor.device)
+    indices.add_(offset)
+    indices.remainder_(elements)
     target_shape = [1,] * len(tensor.shape)
     target_shape[dim] = elements
     indices = indices.view(target_shape).expand(shape)
@@ -212,7 +215,7 @@ class CausalLMBatch(Batch):
             scenario = 'CONCAT'
         elif batches[0].batch_size != new_bs:
             scenario = 'RESHAPE'
-        elif padding[0] <= 1:
+        elif padding[0] <= 0:
             scenario = 'SHIFT'
             offsets = [b.max_input_length - max_input_length for b in batches]
             max_input_length = max(b.max_input_length for b in batches)
@@ -413,7 +416,7 @@ class CausalLMBatch(Batch):
         dbg_trace('FILTER', f'num_reqs:{len(self.requests)} -> {len(request_ids)}')
         request_ids = set(request_ids)
         self.requests = [req for req in self.requests if req.data.id in request_ids]
-        return self.__class__.recombine([self], is_optimized_for_gaudi)
+        return self
 
     @classmethod
     @tracer.start_as_current_span("concatenate")
@@ -646,7 +649,8 @@ class CausalLM(Model):
             batch = batch.__class__.recombine([batch], self.is_optimized_for_gaudi)
 
         scenario = 'PREFILL' if prefill else 'GENERATE'
-        dbg_trace(scenario, f'bs:{batch.batch_size} num_reqs:{len(batch.requests)} seq_len:{batch.seq_length}')
+        dbg_trace(scenario, f'bs:{batch.batch_size} num_reqs:{len(batch.requests)} seq_len:{batch.seq_length} padding:{batch.right_padding}')
+        assert batch.right_padding > 0, 'No more room for next token!'
         self.step = self.step + 1
         if self.hb_profer_started == True and self.step > self.profiling_warmup_steps + self.profiling_steps:
             self.hb_profer.stop()
