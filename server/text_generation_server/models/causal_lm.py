@@ -473,6 +473,16 @@ class CausalLMBatch(Batch):
                 continue
             yield i
 
+def setup_quantization(model):
+    import habana_frameworks.torch.core as htcore
+    from habana_frameworks.torch.core.quantization import _check_params_as_const, _mark_params_as_const
+    from habana_frameworks.torch.hpu import hpu
+
+    print("Initializing inference with quantization")
+    _mark_params_as_const(model)
+    _check_params_as_const(model)
+    htcore.hpu_initialize(model)
+    return model
 
 class CausalLM(Model):
     def __init__(
@@ -532,6 +542,8 @@ class CausalLM(Model):
                 # TODO: revisit placement on CPU when auto-injection is possible
                 with deepspeed.OnDevice(dtype=dtype, device="cpu"):
                     model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, **model_kwargs)
+            import habana_quantization_toolkit
+            habana_quantization_toolkit.prep_model(model)
             model = model.eval()
 
             # Initialize the model
@@ -557,11 +569,15 @@ class CausalLM(Model):
                 revision=revision,
                 torch_dtype=dtype,
             )
+            import habana_quantization_toolkit
+            habana_quantization_toolkit.prep_model(model)
             model = model.eval().to(device)
             # wrap in hpu_graph only if self.enable_hpu_graph is set
             model = remove_kv_cache_from_output(model)
             if self.enable_hpu_graph:
                 model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
+
+        model = setup_quantization(model)
 
         if model.config.model_type in MODELS_OPTIMIZED_WITH_STATIC_SHAPES:
             self.is_optimized_for_gaudi = True
