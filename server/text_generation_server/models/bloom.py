@@ -17,16 +17,15 @@ class BloomCausalLMBatch(CausalLMBatch):
         tokenizer: PreTrainedTokenizerBase,
         dtype: torch.dtype,
         device: torch.device,
-        is_optimized_for_gaudi: bool = False,
+        max_total_tokens: int,
     ) -> "CausalLMBatch":
         batch = super().from_pb(
             pb=pb,
             tokenizer=tokenizer,
             dtype=dtype,
             device=device,
-            is_optimized_for_gaudi=is_optimized_for_gaudi,
+            max_total_tokens=max_total_tokens,
         )
-        batch.keys_head_dim_last = False
         return batch
 
 

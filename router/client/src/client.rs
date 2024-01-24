@@ -141,7 +141,7 @@ impl Client {
             id: 0,
             size: requests.len() as u32,
             requests,
-            max_tokens: 0,
+            max_tokens: max_total_tokens,
         };
 
         let request = tonic::Request::new(WarmupRequest { batch: Some(batch) }).inject_context();

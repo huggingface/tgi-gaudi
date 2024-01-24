@@ -20,6 +20,7 @@ from .profiler import Profiler
 
 class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
     def __init__(self, model: Model, cache: Cache, server_urls: List[str]):
+        self.max_total_tokens = 0
         self.profiler = Profiler()
         with self.profiler.record_event("external", "init"):
             self.cache = cache
@@ -59,13 +60,15 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
                                         {"util": len(batch.requests)}):
             if batch is None:
                 raise ValueError(f"Batch ID {request.batch_id} not found in cache.")
-            filtered_batch = batch.filter(request.request_ids, self.model.is_optimized_for_gaudi)
+            filtered_batch = batch.filter(request.request_ids)
             self.cache.set(filtered_batch)
 
             return generate_pb2.FilterBatchResponse(batch=filtered_batch.to_pb())
 
     async def Warmup(self, request, context):
         with self.profiler.record_event("external", "warmup"):
+            self.max_total_tokens = request.batch.max_tokens
+
             # batch = self.model.batch_type.from_pb(
             #     request.batch, self.model.tokenizer, self.model.dtype, self.model.device
             # )
@@ -79,7 +82,7 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
 
     async def Prefill(self, request, context):
         batch = self.model.batch_type.from_pb(
-            request.batch, self.model.tokenizer, self.model.dtype, self.model.device, self.model.is_optimized_for_gaudi
+            request.batch, self.model.tokenizer, self.model.dtype, self.model.device, self.max_total_tokens
         )
         with self.profiler.record_event("external", "prefill", {"batch_size": batch.input_ids.size(0)}):
 
@@ -113,7 +116,7 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
 
             if len(batches) > 1:
                 with self.profiler.record_event("internal", "concatenate"):
-                    batch = self.model.batch_type.concatenate(batches, self.model.is_optimized_for_gaudi)
+                    batch = self.model.batch_type.concatenate(batches)
             else:
                 batch = batches[0]
 

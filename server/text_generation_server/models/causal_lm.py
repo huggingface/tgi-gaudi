@@ -17,6 +17,7 @@ from contextlib import nullcontext
 from optimum.habana.utils import HabanaProfile, to_gb_rounded
 
 from optimum.habana.transformers.generation import MODELS_OPTIMIZED_WITH_STATIC_SHAPES
+from optimum.habana.transformers.modeling_utils import adapt_transformers_to_gaudi
 from optimum.habana.checkpoint_utils import (
     get_repo_root,
     model_on_meta,
@@ -196,7 +197,7 @@ class CausalLMBatch(Batch):
         )
 
     @classmethod
-    def recombine(cls, batches: List["CausalLMBatch"], is_optimized_for_gaudi: bool = False) -> "CausalLMBatch":
+    def recombine(cls, batches: List["CausalLMBatch"]) -> "CausalLMBatch":
         total_requests = sum(len(b) for b in batches)
         new_bs = round_up(total_requests, BATCH_BUCKET_SIZE)
         batch_id = batches[0].batch_id
@@ -328,7 +329,7 @@ class CausalLMBatch(Batch):
         tokenizer: PreTrainedTokenizerBase,
         dtype: torch.dtype,
         device: torch.device,
-        is_optimized_for_gaudi: bool = False,
+        max_total_tokens: int,
     ) -> "CausalLMBatch":
         dbg_trace('FROM_PB', f'num_reqs:{len(pb.requests)}')
         requests = [CausalLMRequest.from_pb(idx, req, tokenizer) for idx, req in enumerate(pb.requests)]
@@ -340,15 +341,6 @@ class CausalLMBatch(Batch):
         top_n_tokens = [r.top_n_tokens for r in pb.requests]
         top_n_tokens_tensor = torch.tensor(top_n_tokens, device=device, dtype=torch.int64)
         next_token_chooser = HeterogeneousNextTokenChooser.from_pb([r.parameters for r in pb.requests], dtype, device)
-
-        # TODO: this should be set to rust side `max_total_tokens`,
-        # (see https://github.com/huggingface/text-generation-inference/blob/main/launcher/src/main.rs#L177)
-        # but TGI does not offer an API to expose this variable to python, as this variable
-        # is handled by the client but it appears the model is initialized by the server.
-        # An alternative could be to initialize the buffers during warmup.
-        # Dummy
-        max_total_tokens = int(os.getenv("MAX_TOTAL_TOKENS", "0"))
-        logger.info("MAX_TOTAL_TOKENS = {}".format(max_total_tokens))
 
         # TODO: by tokenizing all inputs at once we loose information on actual input lengths
         # this means that we cannot shift inputs to the left after a long input sequence
@@ -366,7 +358,7 @@ class CausalLMBatch(Batch):
 
         input_len = tokenized_inputs["input_ids"].shape[1]
         extra_padding = 0
-        if is_optimized_for_gaudi and max_total_tokens > 0:
+        if max_total_tokens > 0:
             extra_padding = max(extra_padding, max_total_tokens - max_input_length - max_new_tokens)
 
         for r in requests:
@@ -377,15 +369,13 @@ class CausalLMBatch(Batch):
         input_ids = tokenized_inputs["input_ids"]
         attention_mask = tokenized_inputs["attention_mask"]
 
-        if is_optimized_for_gaudi:
-            input_ids = torch.nn.functional.pad(
-                input_ids, (0, max_new_tokens + extra_padding), value=tokenizer.pad_token_id
-            )
-            attention_mask = torch.nn.functional.pad(
-                attention_mask, (0, max_new_tokens + extra_padding), value=0)
-            all_input_ids = input_ids.T.split(1, dim=1)
-        else:
-            all_input_ids = input_ids.clone().T.split(1, dim=1)
+        input_ids = torch.nn.functional.pad(
+            input_ids, (0, max_new_tokens + extra_padding), value=tokenizer.pad_token_id
+        )
+        attention_mask = torch.nn.functional.pad(
+            attention_mask, (0, max_new_tokens + extra_padding), value=0
+        )
+        all_input_ids = input_ids.T.split(1, dim=1)
 
         for r in requests:
             r.all_input_ids = all_input_ids[r.idx]
@@ -408,11 +398,11 @@ class CausalLMBatch(Batch):
             top_n_tokens=top_n_tokens,
             top_n_tokens_tensor=top_n_tokens_tensor,
             input_length=max_input_length,
-            right_padding=max_new_tokens + extra_padding if is_optimized_for_gaudi else 0
+            right_padding=max_new_tokens + extra_padding
         )
 
     @tracer.start_as_current_span("filter")
-    def filter(self, request_ids: List[int], is_optimized_for_gaudi: bool = False) -> Optional["CausalLMBatch"]:
+    def filter(self, request_ids: List[int]) -> Optional["CausalLMBatch"]:
         dbg_trace('FILTER', f'num_reqs:{len(self.requests)} -> {len(request_ids)}')
         request_ids = set(request_ids)
         self.requests = [req for req in self.requests if req.data.id in request_ids]
@@ -420,8 +410,8 @@ class CausalLMBatch(Batch):
 
     @classmethod
     @tracer.start_as_current_span("concatenate")
-    def concatenate(cls, batches: List["CausalLMBatch"], is_optimized_for_gaudi: bool = False) -> "CausalLMBatch":
-        return cls.recombine(batches, is_optimized_for_gaudi)
+    def concatenate(cls, batches: List["CausalLMBatch"]) -> "CausalLMBatch":
+        return cls.recombine(batches)
 
     def __len__(self):
         return len(self.requests)
@@ -459,14 +449,9 @@ class CausalLM(Model):
         revision: Optional[str] = None,
         dtype: Optional[torch.dtype] = None,
     ):
-        device = torch.device("hpu")
-
-        dtype = torch.bfloat16 if dtype is None else dtype
-
-        from optimum.habana.transformers.modeling_utils import adapt_transformers_to_gaudi
-
         adapt_transformers_to_gaudi()
 
+        # Create tokenizer
         tokenizer = AutoTokenizer.from_pretrained(
             model_id,
             revision=revision,
@@ -475,60 +460,16 @@ class CausalLM(Model):
         )
         make_tokenizer_optional(tokenizer)
 
-        model_kwargs = {
-            "revision": revision,
-        }
-
+        # Create model
+        device = torch.device("hpu")
+        dtype = torch.bfloat16 if dtype is None else dtype
         world_size = int(os.getenv("WORLD_SIZE", "1"))
         rank = int(os.getenv("RANK", "0"))
-        self.enable_hpu_graph = os.getenv("ENABLE_HPU_GRAPH", "true").lower() == "true"
-        self.limit_hpu_graph = os.getenv("LIMIT_HPU_GRAPH", "false").lower() == "true"
 
         if world_size > 1:
-            import habana_frameworks.torch.hpu as torch_hpu
-
-            # Get world size, rank and local rank
-            from habana_frameworks.torch.distributed.hccl import initialize_distributed_hpu
-
-            world_size, rank, local_rank = initialize_distributed_hpu()
-            import deepspeed
-
-            # Initialize process(es) for DeepSpeed
-            deepspeed.init_distributed(dist_backend="hccl")
-            logger.info(
-                "DeepSpeed is enabled. world_size {} rank {} local_rank {}".format(world_size, rank, local_rank)
+            model = self.get_deepspeed_model(
+                model_id, dtype, revision
             )
-            config = AutoConfig.from_pretrained(model_id, **model_kwargs)
-            load_to_meta = model_on_meta(config)
-
-            if load_to_meta:
-                # Construct model with fake meta tensors, later will be replaced on devices during ds-inference ckpt load
-                with deepspeed.OnDevice(dtype=dtype, device="meta"):
-                    model = AutoModelForCausalLM.from_config(config, torch_dtype=dtype)
-            else:
-                get_repo_root(model_id, local_rank=os.getenv("LOCAL_RANK"))
-                # TODO: revisit placement on CPU when auto-injection is possible
-                with deepspeed.OnDevice(dtype=dtype, device="cpu"):
-                    model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, **model_kwargs)
-            model = model.eval()
-
-            # Initialize the model
-            ds_inference_kwargs = {"dtype": dtype}
-            ds_inference_kwargs["tensor_parallel"] = {"tp_size": world_size}
-            ds_inference_kwargs["enable_cuda_graph"] = False
-
-
-            if load_to_meta:
-                # model loaded to meta is managed differently
-                checkpoints_json = tempfile.NamedTemporaryFile(suffix=".json", mode="+w")
-                write_checkpoints_json(model_id, local_rank, checkpoints_json)
-                ds_inference_kwargs["checkpoint"] = checkpoints_json.name
-            model = deepspeed.init_inference(model, **ds_inference_kwargs)
-            model = model.module
-            model = remove_kv_cache_from_output(model)
-            if self.enable_hpu_graph:
-                model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
-
         else:
             get_repo_root(model_id)
             model = AutoModelForCausalLM.from_pretrained(
@@ -537,15 +478,16 @@ class CausalLM(Model):
                 torch_dtype=dtype,
             )
             model = model.eval().to(device)
-            #wrap in hpu_graph only if self.enable_hpu_graph is set
-            model = remove_kv_cache_from_output(model)
-            if self.enable_hpu_graph:
-                model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
 
-        if model.config.model_type in MODELS_OPTIMIZED_WITH_STATIC_SHAPES:
-            self.is_optimized_for_gaudi = True
-        else:
-            self.is_optimized_for_gaudi = False
+        self.enable_hpu_graph = os.getenv("ENABLE_HPU_GRAPH", "true").lower() == "true"
+        self.limit_hpu_graph = os.getenv("LIMIT_HPU_GRAPH", "false").lower() == "true"
+
+        model = remove_kv_cache_from_output(model)
+        if self.enable_hpu_graph:
+            model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
+
+        if model.config.model_type not in MODELS_OPTIMIZED_WITH_STATIC_SHAPES:
+            raise ValueError(f"Model type {model.config.model_type} is not supported!")
 
         if tokenizer.pad_token_id is None:
             if model.config.pad_token_id is not None:
@@ -561,7 +503,6 @@ class CausalLM(Model):
             "use_cache": True,
             "return_dict": True,
         }
-
         if model.config.model_type == "llama":
             kwargs["attn_softmax_bf16"] = True
             kwargs["trim_logits"] = True
@@ -575,19 +516,71 @@ class CausalLM(Model):
             rank=rank,
             kwargs=kwargs,
         )
+
+        # Create profiler
         self.profiling_warmup_steps = int(os.getenv("PROF_WARMUPSTEP", "0"))
         self.profiling_steps = int(os.getenv("PROF_STEP", "5"))
         output_dir = os.getenv("PROF_PATH", "/tmp/hpu_profile")
-        self.hb_profer = HabanaProfile(
-            warmup=self.profiling_warmup_steps, active=self.profiling_steps, output_dir=output_dir
+        self.profiler = HabanaProfile(
+            warmup=self.profiling_warmup_steps,
+            active=self.profiling_steps,
+            output_dir=output_dir,
+            record_shapes=False
         )
         if self.profiling_warmup_steps > 0:
-            self.hb_profer_started = True
-            self.hb_profer.start()
+            self.profiler_started = True
+            self.profiler.start()
         else:
-            self.hb_profer = None
-            self.hb_profer_started = False
+            self.profiler = None
+            self.profiler_started = False
         self.step = 0
+
+    def get_deepspeed_model(
+        self,
+        model_id: str,
+        dtype: torch.dtype,
+        revision: Optional[str] = None
+    ) -> torch.nn.Module:
+        import deepspeed
+        from habana_frameworks.torch.distributed.hccl import initialize_distributed_hpu
+
+        world_size, rank, local_rank = initialize_distributed_hpu()
+        model_kwargs = {
+            "revision": revision,
+        }
+
+        # Initialize process(es) for DeepSpeed
+        deepspeed.init_distributed(dist_backend="hccl")
+        logger.info(
+            "DeepSpeed is enabled. world_size {} rank {} local_rank {}".format(world_size, rank, local_rank)
+        )
+        config = AutoConfig.from_pretrained(model_id, **model_kwargs)
+        load_to_meta = model_on_meta(config)
+
+        if load_to_meta:
+            # Construct model with fake meta tensors, later will be replaced on devices during ds-inference ckpt load
+            with deepspeed.OnDevice(dtype=dtype, device="meta"):
+                model = AutoModelForCausalLM.from_config(config, torch_dtype=dtype)
+        else:
+            get_repo_root(model_id, local_rank=os.getenv("LOCAL_RANK"))
+            # TODO: revisit placement on CPU when auto-injection is possible
+            with deepspeed.OnDevice(dtype=dtype, device="cpu"):
+                model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, **model_kwargs)
+        model = model.eval()
+
+        # Initialize the model
+        ds_inference_kwargs = {"dtype": dtype}
+        ds_inference_kwargs["tensor_parallel"] = {"tp_size": world_size}
+        ds_inference_kwargs["enable_cuda_graph"] = False
+
+        if load_to_meta:
+            # model loaded to meta is managed differently
+            checkpoints_json = tempfile.NamedTemporaryFile(suffix=".json", mode="+w")
+            write_checkpoints_json(model_id, local_rank, checkpoints_json)
+            ds_inference_kwargs["checkpoint"] = checkpoints_json.name
+        model = deepspeed.init_inference(model, **ds_inference_kwargs)
+
+        return model.module
 
     @property
     def batch_type(self) -> Type[CausalLMBatch]:
@@ -608,7 +601,6 @@ class CausalLM(Model):
         else:
             return super().decode_token(all_input_ids, prefix_offset, read_offset)
 
-
     def forward(
         self,
         input_ids,
@@ -623,10 +615,8 @@ class CausalLM(Model):
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "past_key_values": past_key_values,
+            "token_idx": token_idx
         }
-
-        if self.is_optimized_for_gaudi:
-            kwargs["token_idx"] = token_idx
 
         if self.has_position_ids:
             kwargs["position_ids"] = position_ids
@@ -643,46 +633,33 @@ class CausalLM(Model):
 
     @tracer.start_as_current_span("generate_token")
     def generate_token(self, batch: CausalLMBatch) -> Tuple[List[Generation], Optional[CausalLMBatch]]:
+        self.check_profiler_stop()
+
         prefill = batch.past_key_values is None
         # Check if we need to do any bookkeeping first
         if not prefill:
-            batch = batch.__class__.recombine([batch], self.is_optimized_for_gaudi)
+            batch = batch.__class__.recombine([batch])
 
         scenario = 'PREFILL' if prefill else 'GENERATE'
         dbg_trace(scenario, f'bs:{batch.batch_size} num_reqs:{len(batch.requests)} seq_len:{batch.seq_length} padding:{batch.right_padding}')
         assert batch.right_padding > 0, 'No more room for next token!'
-        self.step = self.step + 1
-        if self.hb_profer_started == True and self.step > self.profiling_warmup_steps + self.profiling_steps:
-            self.hb_profer.stop()
-            self.hb_profer_started = False
 
-        if self.is_optimized_for_gaudi:
-            token_idx = torch.tensor(batch.attention_mask.shape[-1] - batch.right_padding).to(self.device)
-            attention_mask = batch.attention_mask
-        else:
-            token_idx = None
-            # slice the attention mask to the correct shape
-            # TODO fix me!
-            attention_mask = batch.attention_mask[:, : -batch.padding_right_offset]
-        if batch.past_key_values:
-            if token_idx is not None:
-                input_ids = torch.index_select(batch.input_ids, 1, token_idx - 1)
-        else:
-            input_ids = batch.input_ids
-
+        # Generation
+        token_idx = torch.tensor(batch.attention_mask.shape[-1] - batch.right_padding).to(self.device)
         if prefill:
             logits, past = self.forward(
-                input_ids,
-                attention_mask,
+                batch.input_ids,
+                batch.attention_mask,
                 batch.position_ids,
                 token_idx,
                 batch.past_key_values,
                 bypass_hpu_graph = prefill and self.limit_hpu_graph if self.enable_hpu_graph else None
             )
         else:
+            input_ids = torch.index_select(batch.input_ids, 1, token_idx - 1)
             logits = self.forward(
                 input_ids,
-                attention_mask,
+                batch.attention_mask,
                 batch.position_ids,
                 token_idx,
                 batch.past_key_values,
@@ -695,7 +672,7 @@ class CausalLM(Model):
 
         # Select next token
         input_length = batch.input_length
-        if self.is_optimized_for_gaudi and logits.shape[-2] > 1:
+        if logits.shape[-2] > 1:
             next_token_ids, next_token_logprobs, logprobs = batch.next_token_chooser(
                 batch.input_ids[:, :token_idx], logits[:, input_length - 1 : input_length, :].squeeze(-2)
             )
@@ -731,10 +708,7 @@ class CausalLM(Model):
             top_token_logprobs = batch_top_token_logprobs[req_idx]
 
             # Append next token to all tokens
-            if self.is_optimized_for_gaudi:
-                all_input_ids[input_length] = next_token_id
-            else:
-                all_input_ids = torch.cat([all_input_ids, next_token_id])
+            all_input_ids[input_length] = next_token_id
             new_input_length = input_length + 1
 
             # Generated token
@@ -769,7 +743,7 @@ class CausalLM(Model):
                     generated_text = None
 
                 # Prefill
-                if stopping_criteria.current_tokens == 1 and request.prefill_logprobs:
+                if prefill and request.prefill_logprobs:
                     # Remove generated token to only have prefill and add nan for first prompt token
                     prefill_logprobs = [float("nan")] + next_token_logprobs
                     prefill_token_ids = all_input_ids[0 : new_input_length - 1]
@@ -817,27 +791,16 @@ class CausalLM(Model):
             req.read_offset = read_offset
             htorch.core.mark_step()
 
-        if token_idx is None:
-            batch.input_ids[:, 0] = next_token_ids[:, 0]
-        else:
-            batch.input_ids.index_copy_(1, token_idx.cpu(), next_token_ids.unsqueeze(1))
+        batch.input_ids.index_copy_(1, token_idx.cpu(), next_token_ids.unsqueeze(1))
 
         # We finished all generations in the batch; there is no next batch
         if stopped:
-            if self.hb_profer_started == True:
-                self.hb_profer.step()
+            self.profiler_step()
             htorch.core.mark_step()
             return generations, None
 
-        # Slice unused values from prefill, use it to store next token
-        if token_idx is None:
-            batch.input_ids = batch.input_ids[:, :1]
-
         # Update attention_mask as we added a new token to input_ids
-        if self.is_optimized_for_gaudi:
-            batch.attention_mask.index_fill_(1, token_idx, 1)
-        else:
-            batch.attention_mask[:, -batch.padding_right_offset] = 1
+        batch.attention_mask.index_fill_(1, token_idx, 1)
 
         # Adjust lengths
         batch.input_length += 1
@@ -849,12 +812,21 @@ class CausalLM(Model):
             batch.position_ids = batch.position_ids[:, token_idx - 1 : token_idx] + 1
         else:
             batch.position_ids += 1
+
         # Update past key values
         if prefill:
             batch.past_key_values = past
 
-        if self.hb_profer_started == True:
-            self.hb_profer.step()
+        self.profiler_step()
         htorch.core.mark_step()
-
         return generations, batch
+
+    def profiler_step(self) -> None:
+        if self.profiler_started == True:
+            self.profiler.step()
+
+    def check_profiler_stop(self) -> None:
+        self.step += 1
+        if self.profiler_started == True and self.step > self.profiling_warmup_steps + self.profiling_steps:
+            self.profiler.stop()
+            self.profiler_started = False
