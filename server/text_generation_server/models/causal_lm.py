@@ -141,6 +141,15 @@ def remove_kv_cache_from_output(module):
     return module
 
 
+def pad_tensors(tensors, paddings, dim, value):
+    for i, (tensor, padding) in enumerate(zip(tensors, paddings)):
+        if padding > 0:
+            pad_shape = (0, 0, 0, padding) if dim == -2 else (0, padding)
+            tensors[i] = torch.nn.functional.pad(tensor, pad_shape, value=value)
+            htorch.core.mark_step()
+    return tensors
+
+
 @dataclass
 class CausalLMRequest:
     idx: int
@@ -197,7 +206,7 @@ class CausalLMBatch(Batch):
         )
 
     @classmethod
-    def recombine(cls, batches: List["CausalLMBatch"]) -> "CausalLMBatch":
+    def recombine(cls, batches: List["CausalLMBatch"], pad_token_id: int) -> "CausalLMBatch":
         total_requests = sum(len(b) for b in batches)
         new_bs = round_up(total_requests, BATCH_BUCKET_SIZE)
         batch_id = batches[0].batch_id
@@ -225,7 +234,8 @@ class CausalLMBatch(Batch):
             return batches[0]
 
         inplace = batches[target_batch_idx].batch_size == new_bs
-        dbg_trace(scenario, f'bs:{[b.batch_size for b in batches]}->{new_bs} reqs:{[len(b) for b in batches]} offsets:{offsets} padding:{padding} moves_needed:{moves_needed} inplace:{inplace}')
+        dbg_trace(
+            scenario, f'bs:{[b.batch_size for b in batches]}->{new_bs} reqs:{[len(b) for b in batches]} offsets:{offsets} padding:{padding} moves_needed:{moves_needed} inplace:{inplace}')
 
         grouped_requests = [[req for req in batch.requests] for batch in batches]
         flat_requests = list(itertools.chain(*grouped_requests))
@@ -236,12 +246,9 @@ class CausalLMBatch(Batch):
         else:
             free_indices = itertools.count(0)
 
-        to_tensors = lambda ind: (torch.tensor(ind[0], device=device), torch.tensor(ind[1], device=device))
-        indices = [[to_tensors(req.update_idx(next(free_indices))) for req in batch_reqs] for batch_reqs in grouped_requests]
-
-        max_seq_len = batches[0].attention_mask.size(1)
-        input_length = max_input_length
-        right_padding = max_seq_len - input_length
+        def to_tensors(ind): return (torch.tensor(ind[0], device=device), torch.tensor(ind[1], device=device))
+        indices = [[to_tensors(req.update_idx(next(free_indices))) for req in batch_reqs]
+                   for batch_reqs in grouped_requests]
 
         chunk_size = batches[0].past_key_values[0][0].size(0) // batches[0].batch_size
         num_layers = len(batches[0].past_key_values)
@@ -258,9 +265,14 @@ class CausalLMBatch(Batch):
         for b in batches:
             b.past_key_values = list(b.past_key_values)
 
+        # For prefill there is a space allocated only for first token
+        # Need to add padding to the max total tokens before first decode
+        paddings = [(batch.input_length + batch.right_padding) - batch.seq_length for batch in batches]
+
         src = [b.input_ids for b in batches]
         for b in batches:
             del b.input_ids
+        src = pad_tensors(src, paddings, seq_dim, pad_token_id)
         src = shift_all(src, seq_dim, offsets)
         input_ids = prepare_memory(new_bs, src[target_batch_idx], inplace)
         input_ids = move_data(input_ids, 1, indices, src)
@@ -268,6 +280,7 @@ class CausalLMBatch(Batch):
         src = [b.attention_mask for b in batches]
         for b in batches:
             del b.attention_mask
+        src = pad_tensors(src, paddings, seq_dim, 0)
         src = shift_all(src, seq_dim, offsets)
         attention_mask = prepare_memory(new_bs, src[target_batch_idx], inplace)
         attention_mask = move_data(attention_mask, 1, indices, src)
@@ -282,11 +295,13 @@ class CausalLMBatch(Batch):
         past_key_values = []
         for layer_num in range(num_layers):
             src = [b.past_key_values[layer_num][0] for b in batches]
+            src = pad_tensors(src, paddings, key_dim, 0)
             src = shift_all(src, key_dim, offsets)
             updated_key = prepare_memory(new_bs * chunk_size, src[target_batch_idx], inplace)
             updated_key = move_data(updated_key, chunk_size, indices, src)
 
             src = [b.past_key_values[layer_num][1] for b in batches]
+            src = pad_tensors(src, paddings, value_dim, 0)
             src = shift_all(src, value_dim, offsets)
             updated_value = prepare_memory(new_bs * chunk_size, src[target_batch_idx], inplace)
             updated_value = move_data(updated_value, chunk_size, indices, src)
@@ -305,6 +320,10 @@ class CausalLMBatch(Batch):
             batches[0].next_token_chooser.device
         )
 
+        max_seq_len = attention_mask.size(1)
+        input_length = max_input_length
+        right_padding = max_seq_len - input_length
+
         htorch.core.mark_step()
 
         return cls(
@@ -320,7 +339,6 @@ class CausalLMBatch(Batch):
             input_length=input_length,
             right_padding=right_padding
         )
-
 
     @classmethod
     def from_pb(
@@ -369,13 +387,16 @@ class CausalLMBatch(Batch):
         input_ids = tokenized_inputs["input_ids"]
         attention_mask = tokenized_inputs["attention_mask"]
 
+        # Allocate space for first token
         input_ids = torch.nn.functional.pad(
-            input_ids, (0, max_new_tokens + extra_padding), value=tokenizer.pad_token_id
+            input_ids, (0, 1), value=tokenizer.pad_token_id
         )
         attention_mask = torch.nn.functional.pad(
-            attention_mask, (0, max_new_tokens + extra_padding), value=0
+            attention_mask, (0, 1), value=0
         )
-        all_input_ids = input_ids.T.split(1, dim=1)
+        all_input_ids = torch.nn.functional.pad(
+            input_ids, (0, max_new_tokens + extra_padding - 1), value=tokenizer.pad_token_id
+        ).T.split(1, dim=1)
 
         for r in requests:
             r.all_input_ids = all_input_ids[r.idx]
@@ -410,8 +431,8 @@ class CausalLMBatch(Batch):
 
     @classmethod
     @tracer.start_as_current_span("concatenate")
-    def concatenate(cls, batches: List["CausalLMBatch"]) -> "CausalLMBatch":
-        return cls.recombine(batches)
+    def concatenate(cls, batches: List["CausalLMBatch"], pad_token_id: int = 0) -> "CausalLMBatch":
+        return cls.recombine(batches, pad_token_id)
 
     def __len__(self):
         return len(self.requests)
@@ -638,24 +659,26 @@ class CausalLM(Model):
         prefill = batch.past_key_values is None
         # Check if we need to do any bookkeeping first
         if not prefill:
-            batch = batch.__class__.recombine([batch])
+            batch = batch.__class__.recombine([batch], self.tokenizer.pad_token_id)
 
         scenario = 'PREFILL' if prefill else 'GENERATE'
-        dbg_trace(scenario, f'bs:{batch.batch_size} num_reqs:{len(batch.requests)} seq_len:{batch.seq_length} padding:{batch.right_padding}')
+        dbg_trace(
+            scenario, f'bs:{batch.batch_size} num_reqs:{len(batch.requests)} seq_len:{batch.seq_length} padding:{batch.right_padding}')
         assert batch.right_padding > 0, 'No more room for next token!'
 
-        # Generation
-        token_idx = torch.tensor(batch.attention_mask.shape[-1] - batch.right_padding).to(self.device)
         if prefill:
+            # no right padding for prefill
+            token_idx = torch.tensor(batch.attention_mask.shape[-1] - 1).to(self.device)
             logits, past = self.forward(
                 batch.input_ids,
                 batch.attention_mask,
                 batch.position_ids,
                 token_idx,
                 batch.past_key_values,
-                bypass_hpu_graph = prefill and self.limit_hpu_graph if self.enable_hpu_graph else None
+                bypass_hpu_graph=prefill and self.limit_hpu_graph if self.enable_hpu_graph else None
             )
         else:
+            token_idx = torch.tensor(batch.attention_mask.shape[-1] - batch.right_padding).to(self.device)
             input_ids = torch.index_select(batch.input_ids, 1, token_idx - 1)
             logits = self.forward(
                 input_ids,
@@ -663,7 +686,7 @@ class CausalLM(Model):
                 batch.position_ids,
                 token_idx,
                 batch.past_key_values,
-                bypass_hpu_graph = prefill and self.limit_hpu_graph if self.enable_hpu_graph else None
+                bypass_hpu_graph=prefill and self.limit_hpu_graph if self.enable_hpu_graph else None
             )
 
         # Results
@@ -674,7 +697,7 @@ class CausalLM(Model):
         input_length = batch.input_length
         if logits.shape[-2] > 1:
             next_token_ids, next_token_logprobs, logprobs = batch.next_token_chooser(
-                batch.input_ids[:, :token_idx], logits[:, input_length - 1 : input_length, :].squeeze(-2)
+                batch.input_ids[:, :token_idx], logits[:, input_length - 1: input_length, :].squeeze(-2)
             )
         else:
             next_token_ids, next_token_logprobs, logprobs = batch.next_token_chooser(
@@ -731,7 +754,7 @@ class CausalLM(Model):
                 if stop:
                     # Decode generated tokens
                     output_text = self.decode(
-                        all_input_ids[new_input_length - stopping_criteria.current_tokens : new_input_length, 0]
+                        all_input_ids[new_input_length - stopping_criteria.current_tokens: new_input_length, 0]
                     )
                     generated_text = GeneratedText(
                         output_text,
@@ -746,7 +769,7 @@ class CausalLM(Model):
                 if prefill and request.prefill_logprobs:
                     # Remove generated token to only have prefill and add nan for first prompt token
                     prefill_logprobs = [float("nan")] + next_token_logprobs
-                    prefill_token_ids = all_input_ids[0 : new_input_length - 1]
+                    prefill_token_ids = all_input_ids[0: new_input_length - 1]
                     prefill_texts = self.tokenizer.batch_decode(
                         prefill_token_ids,
                         clean_up_tokenization_spaces=False,
@@ -809,7 +832,7 @@ class CausalLM(Model):
 
         # Update position_ids
         if prefill:
-            batch.position_ids = batch.position_ids[:, token_idx - 1 : token_idx] + 1
+            batch.position_ids = batch.position_ids[:, token_idx - 1: token_idx] + 1
         else:
             batch.position_ids += 1
 

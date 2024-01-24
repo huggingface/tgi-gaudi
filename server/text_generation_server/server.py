@@ -60,6 +60,7 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
                                         {"util": len(batch.requests)}):
             if batch is None:
                 raise ValueError(f"Batch ID {request.batch_id} not found in cache.")
+
             filtered_batch = batch.filter(request.request_ids)
             self.cache.set(filtered_batch)
 
@@ -116,7 +117,7 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
 
             if len(batches) > 1:
                 with self.profiler.record_event("internal", "concatenate"):
-                    batch = self.model.batch_type.concatenate(batches)
+                    batch = self.model.batch_type.concatenate(batches, self.model.tokenizer.pad_token_id)
             else:
                 batch = batches[0]
 
