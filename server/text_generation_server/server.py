@@ -70,43 +70,39 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
             import debugpy
             debugpy.listen(3033)
             debugpy.wait_for_client()
+            debugpy.breakpoint()
             batch1 = self.model.batch_type.from_pb(
-                request.batch, self.model.tokenizer, self.model.dtype, self.model.device, self.model.is_optimized_for_gaudi
+                request.batches[0], self.model.tokenizer, self.model.dtype, self.model.device, self.model.is_optimized_for_gaudi
             )
             #Prefill 1
             _, next_batch = self.model.generate_token(batch1)
-            self.cache.set(next_batch)
             #Decode
-            batch = self.cache.pop(0)
-            _, next_batch = self.model.generate_token(batch)
-            self.cache.set(next_batch)
+            _, next_batch = self.model.generate_token(next_batch)
             #Decode
-            batch = self.cache.pop(0)
-            _, next_batch = self.model.generate_token(batch)
+            _, next_batch = self.model.generate_token(next_batch)
             self.cache.set(next_batch)
             #Second batch
             batch2 = self.model.batch_type.from_pb(
-                request.batch, self.model.tokenizer, self.model.dtype, self.model.device, self.model.is_optimized_for_gaudi
+                request.batches[1], self.model.tokenizer, self.model.dtype, self.model.device, self.model.is_optimized_for_gaudi
             )
             #Prefill 2
             _, next_batch = self.model.generate_token(batch2)
             self.cache.set(next_batch)
             #Concat
             batches = []
-            for batch_pb in request.batches:
-                batch = self.cache.pop(batch_pb.id)
-                batches.append(batch)
+            batch = self.cache.pop(0)
+            batches.append(batch)
+            batch = self.cache.pop(1)
+            batches.append(batch)
             batch = self.model.batch_type.concatenate(batches, self.model.is_optimized_for_gaudi)
             #Decode
             _, next_batch = self.model.generate_token(batch)
-            self.cache.set(next_batch)
             #Filter 1
-            filtered_batch = batch.filter(request.request_ids, self.model.is_optimized_for_gaudi)
+            filtered_batch = next_batch.filter([2, 3], self.model.is_optimized_for_gaudi)
             #Decode
             _, next_batch = self.model.generate_token(filtered_batch)
             self.cache.set(next_batch)
 
-            logger.warning("Warmup is not enabled on HPU.")
             return generate_pb2.WarmupResponse()
 
     async def Prefill(self, request, context):

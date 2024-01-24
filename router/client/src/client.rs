@@ -106,12 +106,13 @@ impl Client {
         max_total_tokens: u32,
     ) -> Result<Option<u32>> {
         let mut n_tokens = 0;
+        let mut req_id = 0;
         let mut requests = Vec::new();
         // Create requests
         while n_tokens < max_prefill_tokens {
             let truncate = min(max_input_length, max_prefill_tokens - n_tokens);
             requests.push(Request {
-                id: 0,
+                id: req_id,
                 // We truncate the input on the server side to be sure that it has the correct size
                 inputs: "_test ".to_string().repeat(max_input_length as usize),
                 truncate,
@@ -131,20 +132,33 @@ impl Client {
                     stop_sequences: vec![],
                     ignore_eos_token: true,
                 }),
-                prefill_logprobs: true,
-                top_n_tokens: 20,
+                prefill_logprobs: false,
+                top_n_tokens: 0,
             });
             n_tokens += max_input_length;
+            req_id += 1;
         }
 
-        let batch = Batch {
+        let mut requests_new = requests.clone();
+
+        let batch1 = Batch {
             id: 0,
             size: requests.len() as u32,
             requests,
             max_tokens: 0,
         };
 
-        let request = tonic::Request::new(WarmupRequest { batch: Some(batch) }).inject_context();
+        let batch2 = Batch {
+            id: 1,
+            size: requests_new.len() as u32,
+            requests: requests_new,
+            max_tokens: 0,
+        };
+
+        let mut batches = Vec::new();
+        batches.push(batch1);
+        batches.push(batch2);
+        let request = tonic::Request::new(WarmupRequest { batches }).inject_context();
         let response = self.stub.warmup(request).await?.into_inner();
         Ok(response.max_supported_total_tokens)
     }
