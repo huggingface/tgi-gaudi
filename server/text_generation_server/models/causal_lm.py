@@ -11,8 +11,6 @@ from dataclasses import dataclass
 from opentelemetry import trace
 from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizerBase, AutoConfig
 from typing import Optional, Tuple, List, Type, Dict
-from habana_frameworks.torch.hpu import wrap_in_hpu_graph
-import habana_frameworks.torch as htorch
 from contextlib import nullcontext
 from optimum.habana.utils import HabanaProfile, to_gb_rounded
 
@@ -59,6 +57,7 @@ def dbg_trace(tag, txt):
         if START_TS is None:
             START_TS = time.perf_counter()
         time_offset = time.perf_counter() - START_TS
+        import habana_frameworks.torch as htorch
         mem_stats = htorch.hpu.memory.memory_stats()
         mem_used = to_gb_rounded(mem_stats['InUse'])
         max_mem_used = to_gb_rounded(mem_stats['MaxInUse'])
@@ -84,6 +83,7 @@ def move_data(dst_tensor, chunk_size, indices, src_tensors):
     result = dst_tensor
     if chunk_size > 1:
         dst_tensor = dst_tensor.view(bs // chunk_size, chunk_size, *dst_tensor.shape[1:])
+    import habana_frameworks.torch as htorch
     htorch.core.mark_step()
     for ind, src_t in zip(indices, src_tensors):
         if chunk_size > 1:
@@ -100,6 +100,7 @@ def shift(tensor, dim, offset):
     elements = shape[dim]
     if offset == 0 or abs(offset) > elements:
         return tensor
+    import habana_frameworks.torch as htorch
     htorch.core.mark_step()
     # We generate indices from (0 - offset + elements) to (elements - offset + elements)
     # so that next modulo operation operates on positive values
@@ -145,6 +146,7 @@ def pad_tensors(tensors, paddings, dim, value):
         if padding > 0:
             pad_shape = (0, 0, 0, padding) if dim == -2 else (0, padding)
             tensors[i] = torch.nn.functional.pad(tensor, pad_shape, value=value)
+            import habana_frameworks.torch as htorch
             htorch.core.mark_step()
     return tensors
 
@@ -323,6 +325,7 @@ class CausalLMBatch(Batch):
         input_length = max_input_length
         right_padding = max_seq_len - input_length
 
+        import habana_frameworks.torch as htorch
         htorch.core.mark_step()
 
         return cls(
@@ -417,6 +420,7 @@ class CausalLMBatch(Batch):
         position_ids = attention_mask.long().cumsum(-1) - 1
         position_ids.masked_fill_(attention_mask == 0, 1)
 
+        import habana_frameworks.torch as htorch
         htorch.core.mark_step()
 
         return cls(
@@ -473,16 +477,6 @@ class CausalLMBatch(Batch):
                 continue
             yield i
 
-def setup_quantization(model):
-    import habana_frameworks.torch.core as htcore
-    from habana_frameworks.torch.core.quantization import _check_params_as_const, _mark_params_as_const
-    from habana_frameworks.torch.hpu import hpu
-
-    print("Initializing inference with quantization")
-    _mark_params_as_const(model)
-    _check_params_as_const(model)
-    htcore.hpu_initialize(model)
-    return model
 
 class CausalLM(Model):
     def __init__(
@@ -492,9 +486,11 @@ class CausalLM(Model):
         dtype: Optional[torch.dtype] = None,
     ):
         device = torch.device("hpu")
+        self.setup_env()
 
         dtype = torch.bfloat16 if dtype is None else dtype
 
+        from habana_frameworks.torch.hpu import wrap_in_hpu_graph
         from optimum.habana.transformers.modeling_utils import adapt_transformers_to_gaudi
 
         adapt_transformers_to_gaudi()
@@ -542,8 +538,7 @@ class CausalLM(Model):
                 # TODO: revisit placement on CPU when auto-injection is possible
                 with deepspeed.OnDevice(dtype=dtype, device="cpu"):
                     model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, **model_kwargs)
-            import habana_quantization_toolkit
-            habana_quantization_toolkit.prep_model(model)
+            model = self.prepare_model_for_quantization(model)
             model = model.eval()
 
             # Initialize the model
@@ -569,15 +564,13 @@ class CausalLM(Model):
                 revision=revision,
                 torch_dtype=dtype,
             )
-            import habana_quantization_toolkit
-            habana_quantization_toolkit.prep_model(model)
+            model = self.prepare_model_for_quantization(model)
             model = model.eval().to(device)
             # wrap in hpu_graph only if self.enable_hpu_graph is set
             model = remove_kv_cache_from_output(model)
             if self.enable_hpu_graph:
                 model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
-
-        model = setup_quantization(model)
+        model = self.setup_quantization(model)
 
         if model.config.model_type in MODELS_OPTIMIZED_WITH_STATIC_SHAPES:
             self.is_optimized_for_gaudi = True
@@ -625,6 +618,43 @@ class CausalLM(Model):
             self.hb_profer = None
             self.hb_profer_started = False
         self.step = 0
+
+    def setup_env(self):
+        import sys
+        assert "habana_frameworks" not in sys.modules
+
+        self.is_quantization_enabled = os.getenv("QUANT_CONFIG", "") != ""
+        if self.is_quantization_enabled:
+            os.environ.setdefault("ENABLE_EXPERIMENTAL_FLAGS", "true")
+            os.environ.setdefault("USE_DEFAULT_QUANT_PARAM", "true")
+            os.environ.setdefault("UPDATE_GRAPH_OUTPUT_MME", "false")
+            os.environ.setdefault("ENABLE_CALC_DYNAMIC_RANGE", "false")
+            os.environ.setdefault(
+                "UPDATE_MME_OUTPUT_PRECISION_FILTER", "v_proj,matmul_av")
+            os.environ.setdefault("EXPERIMENTAL_WEIGHT_SHARING", "FALSE")
+            import habana_frameworks.torch.core as htcore
+            htcore.hpu_set_env()
+
+    def setup_quantization(self, model):
+        if self.is_quantization_enabled:
+            import habana_frameworks.torch.core as htcore
+            from habana_frameworks.torch.core.quantization import _check_params_as_const, _mark_params_as_const
+            _mark_params_as_const(model)
+            _check_params_as_const(model)
+            htcore.hpu_initialize(model)
+        return model
+
+    def prepare_model_for_quantization(self, model):
+        if self.is_quantization_enabled:
+            import habana_quantization_toolkit
+            habana_quantization_toolkit.prep_model(model)
+        return model
+
+    def finish_quantization_measurements(self, model):
+        if self.is_quantization_enabled:
+            import habana_quantization_toolkit
+            habana_quantization_toolkit.finish_measurements(self.model)
+        return model
 
     @property
     def batch_type(self) -> Type[CausalLMBatch]:
@@ -753,6 +783,8 @@ class CausalLM(Model):
 
         next_token_logprobs = next_token_logprobs.tolist()
         next_token_ids_cpu = next_token_ids.cpu()
+
+        import habana_frameworks.torch as htorch
         htorch.core.mark_step()
 
         for req_idx, req in enumerate(batch.requests):

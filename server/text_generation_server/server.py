@@ -146,15 +146,6 @@ def serve(
         diagnose=False,
     )
 
-    os.environ.setdefault("ENABLE_EXPERIMENTAL_FLAGS", "true")
-    os.environ.setdefault("USE_DEFAULT_QUANT_PARAM", "true")
-    os.environ.setdefault("UPDATE_GRAPH_OUTPUT_MME", "false")
-    os.environ.setdefault("ENABLE_CALC_DYNAMIC_RANGE", "false")
-    os.environ.setdefault(
-        "UPDATE_MME_OUTPUT_PRECISION_FILTER", "v_proj,matmul_av")
-    os.environ.setdefault("EXPERIMENTAL_WEIGHT_SHARING", "FALSE")
-    import habana_frameworks.torch.core as htcore
-    htcore.hpu_set_env()
 
     async def serve_inner(
         model_id: str,
@@ -214,9 +205,9 @@ def serve(
         except KeyboardInterrupt:
             logger.info("Signal received. Shutting down")
             await server.stop(0)
-        
-        import habana_quantization_toolkit
-        habana_quantization_toolkit.finish_measurements(model)
+        finally:
+            if hasattr(model,'finish_quantization_measurements'):
+                model.finish_quantization_measurements()
 
     logger.info(
         "Starting Server : model_id= {}, revision = {}  dtype = {}  sharded = {} ".format(
