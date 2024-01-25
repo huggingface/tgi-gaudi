@@ -596,7 +596,8 @@ class CausalLM(Model):
             rank=rank,
             kwargs=kwargs,
         )
-        self.profiling_warmup_steps = int(os.getenv("PROF_WARMUPSTEP", "0"))
+        prof_ranks = [int(val) for val in os.getenv("PROF_RANKS", "0").split(',')]
+        self.profiling_warmup_steps = int(os.getenv("PROF_WARMUPSTEP", "0")) if rank in prof_ranks else 0
         self.profiling_steps = int(os.getenv("PROF_STEP", "5"))
         output_dir = os.getenv("PROF_PATH", "/tmp/hpu_profile")
         self.hb_profer = HabanaProfile(
