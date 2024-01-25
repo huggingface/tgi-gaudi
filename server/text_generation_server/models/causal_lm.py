@@ -600,7 +600,7 @@ class CausalLM(Model):
         self.profiling_steps = int(os.getenv("PROF_STEP", "5"))
         output_dir = os.getenv("PROF_PATH", "/tmp/hpu_profile")
         self.hb_profer = HabanaProfile(
-            warmup=self.profiling_warmup_steps, active=self.profiling_steps, output_dir=output_dir
+            warmup=self.profiling_warmup_steps, active=self.profiling_steps, output_dir=output_dir, record_shapes=False
         )
         if self.profiling_warmup_steps > 0:
             self.hb_profer_started = True
