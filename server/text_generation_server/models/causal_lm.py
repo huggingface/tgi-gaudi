@@ -539,14 +539,16 @@ class CausalLM(Model):
         )
 
         # Create profiler
-        self.profiling_warmup_steps = int(os.getenv("PROF_WARMUPSTEP", "0"))
-        self.profiling_steps = int(os.getenv("PROF_STEP", "5"))
+        ranks_to_profile = [int(val) for val in os.getenv("PROF_RANKS", "0").split(',')]
+        record_shapes = os.getenv("PROF_RECORD_SHAPES", "false").lower() == "true"
         output_dir = os.getenv("PROF_PATH", "/tmp/hpu_profile")
+        self.profiling_warmup_steps = int(os.getenv("PROF_WARMUPSTEP", "0")) if rank in ranks_to_profile else 0
+        self.profiling_steps = int(os.getenv("PROF_STEP", "5"))
         self.profiler = HabanaProfile(
             warmup=self.profiling_warmup_steps,
             active=self.profiling_steps,
             output_dir=output_dir,
-            record_shapes=False
+            record_shapes=record_shapes
         )
         if self.profiling_warmup_steps > 0:
             self.profiler_started = True
