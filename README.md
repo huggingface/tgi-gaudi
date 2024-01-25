@@ -71,16 +71,15 @@ Environment Variables Added:
 
 | Name                  | Value(s)       | Default     | Description                       | Usage                                          |
 |------------------     |:---------------|:------------|:--------------------              |:---------------------------------
-|  MAX_TOTAL_TOKENS     | integer        | 0           | Control the padding of input          | add -e in docker run, such         |
-|  ENABLE_HPU_GRAPH     | true/false     | true        | Enable hpu graph or not                                                      |  add -e in docker run command  |
-|  PROF_WARMUPSTEP      | integer        | 0           | Enable/disable profile, control profile warmup step, 0 means disable profile |  add -e in docker run command  |
-|  PROF_STEP            | interger       | 5           | Control profile step                                                         |  add -e in docker run command  |
-|  PROF_PATH            | string         | /root/text-generation-inference                                   | Define profile folder  | add -e in docker run command  |
+| ENABLE_HPU_GRAPH      | True/False     | True        | Enable HPU graph for faster execution                                                      |  add -e in docker run command  |
 | LIMIT_HPU_GRAPH       | True/False     | False       | Skip HPU graph usage for prefill to save memory, set to `True` for large sequence/decoding lengths(e.g. 300/212) | add -e in docker run command |
 | BATCH_BUCKET_SIZE     | integer        | 8           | Batch size for decode operation will be rounded to the nearest multiple of this number. This limits the number of cached graphs | add -e in docker run command |
 | PREFILL_BATCH_BUCKET_SIZE     | integer        | 4           | Batch size for prefill operation will be rounded to the nearest multiple of this number. This limits the number of cached graphs | add -e in docker run command |
-| SKIP_TOKENIZER_IN_TGI | True/False     | False        | Skip tokenizer for input/output processing | add -e in docker run command |
-|  TGI_PROFILER_ENABLED | True/False     | False       | Collect high-level server tracing events          | add -e in docker run command  |
+| PROF_WARMUPSTEP      | integer        | 0           | Enable/disable profile, control profile warmup step, 0 means disable profile |  add -e in docker run command  |
+| PROF_STEP            | interger       | 5           | Control profile step                                                         |  add -e in docker run command  |
+| PROF_PATH            | string         | /root/text-generation-inference                                   | Define profile folder  | add -e in docker run command  |
+| SKIP_TOKENIZER_IN_TGI| True/False     | False        | Skip tokenizer for input/output processing | add -e in docker run command |
+| TGI_PROFILER_ENABLED | True/False     | False       | Collect high-level server tracing events          | add -e in docker run command  |
 
 </div>
 
