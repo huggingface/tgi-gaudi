@@ -67,10 +67,6 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
     async def Warmup(self, request, context):
         with self.profiler.record_event("external", "warmup"):
             #First batch
-            import debugpy
-            debugpy.listen(3033)
-            debugpy.wait_for_client()
-            debugpy.breakpoint()
             batch1 = self.model.batch_type.from_pb(
                 request.batches[0], self.model.tokenizer, self.model.dtype, self.model.device, self.model.is_optimized_for_gaudi
             )
@@ -97,11 +93,6 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
             batch = self.model.batch_type.concatenate(batches, self.model.is_optimized_for_gaudi)
             #Decode
             _, next_batch = self.model.generate_token(batch)
-            #Filter 1
-            filtered_batch = next_batch.filter([2, 3], self.model.is_optimized_for_gaudi)
-            #Decode
-            _, next_batch = self.model.generate_token(filtered_batch)
-            self.cache.set(next_batch)
 
             return generate_pb2.WarmupResponse()
 
