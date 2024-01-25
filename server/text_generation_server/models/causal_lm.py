@@ -538,7 +538,6 @@ class CausalLM(Model):
                 # TODO: revisit placement on CPU when auto-injection is possible
                 with deepspeed.OnDevice(dtype=dtype, device="cpu"):
                     model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, **model_kwargs)
-            model = self.prepare_model_for_quantization(model)
             model = model.eval()
 
             # Initialize the model
@@ -553,6 +552,7 @@ class CausalLM(Model):
                 ds_inference_kwargs["checkpoint"] = checkpoints_json.name
             model = deepspeed.init_inference(model, **ds_inference_kwargs)
             model = model.module
+            model = self.prepare_model_for_quantization(model)
             model = remove_kv_cache_from_output(model)
             if self.enable_hpu_graph:
                 model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
