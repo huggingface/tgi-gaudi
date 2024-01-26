@@ -4,6 +4,7 @@ use crate::pb::generate::v1::*;
 use crate::Result;
 use grpc_metadata::InjectTelemetryContext;
 use std::cmp::min;
+use std::env;
 use tonic::transport::{Channel, Uri};
 use tracing::instrument;
 
@@ -108,13 +109,28 @@ impl Client {
         let mut n_tokens = 0;
         let mut req_id = 0;
         let mut requests = Vec::new();
+        let skip_tokenizer_in_tgi = env::var("SKIP_TOKENIZER_IN_TGI").ok().map_or(false, |value| value.to_lowercase() == "true");
         // Create requests
         while n_tokens < max_prefill_tokens {
             let truncate = min(max_input_length, max_prefill_tokens - n_tokens);
+            let inputs = if skip_tokenizer_in_tgi {
+                "1, 1, 518, 25580, 29962, 3532, 14816, 29903, 6778, 13, 3492, 526, 385, 319, 29902, 
+                20255, 393, 6911, 2305, 1284, 2472, 29889, 4911, 674, 366, 2367, 366, 263, 1139, 29889, 
+                3575, 3414, 338, 304, 1234, 408, 10847, 3730, 408, 366, 508, 29889, 5806, 22862, 1348, 
+                4331, 29899, 29890, 858, 1022, 322, 26922, 596, 1234, 29889, 13, 29966, 829, 14816, 
+                29903, 6778, 13, 13, 29954, 5428, 278, 10541, 376, 29909, 6114, 411, 263, 6534, 29891, 
+                260, 16234, 29877, 373, 902, 1250, 338, 19436, 263, 3708, 344, 411, 263, 2654, 1652, 
+                11251, 1596, 1213, 508, 591, 17668, 393, 376, 1576, 6114, 29915, 29879, 3708, 344, 
+                756, 2654, 18281, 373, 372, 1213, 29973, 13, 5856, 29901, 13, 29899, 4874, 13, 29899, 
+                372, 338, 451, 1950, 304, 2649, 13, 29899, 694, 2567, 29892, 1235, 29915, 29879, 367, 
+                16232, 408, 1950, 29889, 3834, 7291, 937, 29901, 518, 29914, 25580, 29962, 29871".to_string()
+            } else {
+                "_test ".to_string().repeat(max_input_length as usize)
+            };
             requests.push(Request {
                 id: req_id,
                 // We truncate the input on the server side to be sure that it has the correct size
-                inputs: "_test ".to_string().repeat(max_input_length as usize),
+                inputs: inputs,
                 truncate,
                 // Set sampling parameters to also take these ops into account in the max memory
                 parameters: Some(NextTokenChooserParameters {
@@ -139,7 +155,7 @@ impl Client {
             req_id += 1;
         }
 
-        let mut requests_new = requests.clone();
+        let requests_new = requests.clone();
 
         let batch1 = Batch {
             id: 0,
