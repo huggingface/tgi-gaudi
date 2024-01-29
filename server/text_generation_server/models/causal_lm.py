@@ -221,9 +221,13 @@ class CausalLMBatch(Batch):
         batch_id = batches[0].batch_id
         device = batches[0].input_ids.device
 
-        max_input_length = max(b.input_length for b in batches)
+        input_lengths = [b.input_length for b in batches]
+        max_input_length = max(input_lengths)
         offsets = [max_input_length - b.input_length for b in batches]
         padding = [b.right_padding for b in batches]
+        # For prefill there is a space allocated only for first token
+        # Need to add padding to the max total tokens before first decode
+        extra_padding = [MAX_TOTAL_TOKENS - b.seq_length for b in batches]
 
         moves_needed = [total_requests - len(b) if b.batch_size == new_bs else total_requests for b in batches]
         target_batch_idx = min(enumerate(moves_needed), key=lambda idx_val: idx_val[1])[0]
@@ -232,9 +236,9 @@ class CausalLMBatch(Batch):
         # FIXME: max_seq_len for non optimized code
         if len(batches) > 1:
             scenario = 'CONCAT'
-        elif batches[0].batch_size != new_bs:
+        elif batches[target_batch_idx].batch_size != new_bs:
             scenario = 'RESHAPE'
-        elif padding[0] <= 0:
+        elif padding[target_batch_idx] <= 0:
             scenario = 'SHIFT'
             offsets = [b.max_input_length - max_input_length for b in batches]
             max_input_length = max(b.max_input_length for b in batches)
@@ -242,9 +246,15 @@ class CausalLMBatch(Batch):
             # Nothing to do
             return batches[0]
 
-        inplace = batches[target_batch_idx].batch_size == new_bs
+        inplace = (batches[target_batch_idx].batch_size == new_bs)
+
         dbg_trace(
-            scenario, f'bs:{[b.batch_size for b in batches]}->{new_bs} reqs:{[len(b) for b in batches]} offsets:{offsets} padding:{padding} moves_needed:{moves_needed} inplace:{inplace}')
+            scenario, f'bs:{[b.batch_size for b in batches]}->{new_bs}'
+                      f' reqs:{[len(b) for b in batches]}'
+                      f' offsets:{offsets}'
+                      f' input_lengths:{input_lengths}'
+                      f' cur_padding:{padding}'
+                      f' inplace:{inplace}')
 
         grouped_requests = [[req for req in batch.requests] for batch in batches]
         flat_requests = list(itertools.chain(*grouped_requests))
@@ -274,15 +284,11 @@ class CausalLMBatch(Batch):
         for b in batches:
             b.past_key_values = list(b.past_key_values)
 
-        # For prefill there is a space allocated only for first token
-        # Need to add padding to the max total tokens before first decode
-        paddings = [MAX_TOTAL_TOKENS - batch.seq_length for batch in batches]
-
         src = [b.input_ids for b in batches]
         for b in batches:
             del b.input_ids
         src = shift_all(src, seq_dim, offsets)
-        src = pad_tensors(src, paddings, seq_dim, pad_token_id)
+        src = pad_tensors(src, extra_padding, seq_dim, pad_token_id)
         input_ids = prepare_memory(new_bs, src[target_batch_idx], inplace)
         input_ids = move_data(input_ids, 1, indices, src)
 
@@ -290,7 +296,7 @@ class CausalLMBatch(Batch):
         for b in batches:
             del b.attention_mask
         src = shift_all(src, seq_dim, offsets)
-        src = pad_tensors(src, paddings, seq_dim, 0)
+        src = pad_tensors(src, extra_padding, seq_dim, 0)
         attention_mask = prepare_memory(new_bs, src[target_batch_idx], inplace)
         attention_mask = move_data(attention_mask, 1, indices, src)
 
@@ -310,7 +316,7 @@ class CausalLMBatch(Batch):
         htorch.core.mark_step()
         src_keys = shift_all(src_keys, key_dim, offsets)
         htorch.core.mark_step()
-        src_keys = pad_tensors(src_keys, paddings, key_dim, 0)
+        src_keys = pad_tensors(src_keys, extra_padding, key_dim, 0)
         htorch.core.mark_step()
         src_keys = [[t.squeeze(0).clone() for t in torch.split(src, 1)] for src in src_keys]
         htorch.core.mark_step()
@@ -322,7 +328,7 @@ class CausalLMBatch(Batch):
         htorch.core.mark_step()
         src_values = shift_all(src_values, value_dim, offsets)
         htorch.core.mark_step()
-        src_values = pad_tensors(src_values, paddings, value_dim, 0)
+        src_values = pad_tensors(src_values, extra_padding, value_dim, 0)
         htorch.core.mark_step()
         src_values = [[t.squeeze(0).clone() for t in torch.split(src, 1)] for src in src_values]
         htorch.core.mark_step()
