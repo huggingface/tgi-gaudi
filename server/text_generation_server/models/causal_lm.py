@@ -552,6 +552,8 @@ class CausalLM(Model):
                 ds_inference_kwargs["checkpoint"] = checkpoints_json.name
             model = deepspeed.init_inference(model, **ds_inference_kwargs)
             model = model.module
+            if model.config.model_type == "llama":
+                self.patch_scoped_linear_all_reduce(model)
             model = self.prepare_model_for_quantization(model)
             model = remove_kv_cache_from_output(model)
             if self.enable_hpu_graph:
@@ -657,6 +659,15 @@ class CausalLM(Model):
             import habana_quantization_toolkit
             habana_quantization_toolkit.finish_measurements(self.model)
         return model
+
+    def patch_scoped_linear_all_reduce(self, model):
+        from deepspeed.module_inject.layers import LinearAllreduce
+        from optimum.habana.transformers.models.modeling_all_models import ScopedLinearAllReduce
+        for name, module in model.named_children():
+            if type(module) is LinearAllreduce:
+                SL = ScopedLinearAllReduce(mod=module)
+                setattr(model, name, SL)
+            self.patch_scoped_linear_all_reduce(module)
 
     @property
     def batch_type(self) -> Type[CausalLMBatch]:
