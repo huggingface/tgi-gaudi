@@ -97,7 +97,7 @@ def move_data(dst_tensor, chunk_size, indices, src_tensors):
     return result
 
 
-def shift_chunks(offset):
+def generate_shift_chunks(offset):
     chunk_sizes = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
     result = []
     while offset != 0:
@@ -118,10 +118,9 @@ def roll(tensor, dim, chunks):
 
 def shift(tensor, dim, offset):
     assert dim < 0, 'Only negative dims are supported'
-    elements = tensor.size(dim)
-    if offset == 0 or abs(offset) > elements:
+    if offset == 0:
         return tensor
-    chunks = shift_chunks(offset)
+    chunks = generate_shift_chunks(offset)
     tensor = roll(tensor, dim, chunks)
     return tensor
 
