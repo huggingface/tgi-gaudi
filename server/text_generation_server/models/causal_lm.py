@@ -43,6 +43,7 @@ if 'GRAPH_VISUALIZATION' in os.environ:
     for f in glob.glob('.graph_dumps/*'):
         os.remove(f)
 
+MAX_TOTAL_TOKENS = int(os.getenv("MAX_TOTAL_TOKENS", "0"))
 BATCH_BUCKET_SIZE = int(os.environ.get('BATCH_BUCKET_SIZE', 8))
 PAD_SEQUENCE_TO_MULTIPLE_OF = int(os.environ.get('PAD_SEQUENCE_TO_MULTIPLE_OF', 128))
 PREFILL_BATCH_BUCKET_SIZE = int(os.environ.get('PREFILL_BATCH_BUCKET_SIZE', 4))
@@ -204,7 +205,6 @@ class CausalLMBatch(Batch):
     top_n_tokens_tensor: torch.Tensor
 
     input_length: int
-    right_padding: int
 
     def to_pb(self) -> generate_pb2.CachedBatch:
         return generate_pb2.CachedBatch(
@@ -276,7 +276,7 @@ class CausalLMBatch(Batch):
 
         # For prefill there is a space allocated only for first token
         # Need to add padding to the max total tokens before first decode
-        paddings = [(batch.input_length + batch.right_padding) - batch.seq_length for batch in batches]
+        paddings = [MAX_TOTAL_TOKENS - batch.seq_length for batch in batches]
 
         src = [b.input_ids for b in batches]
         for b in batches:
@@ -342,7 +342,6 @@ class CausalLMBatch(Batch):
 
         max_seq_len = attention_mask.size(1)
         input_length = max_input_length
-        right_padding = max_seq_len - input_length
 
         htorch.core.mark_step()
 
@@ -357,7 +356,6 @@ class CausalLMBatch(Batch):
             top_n_tokens=top_n_tokens,
             top_n_tokens_tensor=top_n_tokens_tensor,
             input_length=input_length,
-            right_padding=right_padding
         )
 
     @classmethod
@@ -379,15 +377,6 @@ class CausalLMBatch(Batch):
         top_n_tokens = [r.top_n_tokens for r in pb.requests]
         top_n_tokens_tensor = torch.tensor(top_n_tokens, device=device, dtype=torch.int64)
         next_token_chooser = HeterogeneousNextTokenChooser.from_pb([r.parameters for r in pb.requests], dtype, device)
-
-        # TODO: this should be set to rust side `max_total_tokens`,
-        # (see https://github.com/huggingface/text-generation-inference/blob/main/launcher/src/main.rs#L177)
-        # but TGI does not offer an API to expose this variable to python, as this variable
-        # is handled by the client but it appears the model is initialized by the server.
-        # An alternative could be to initialize the buffers during warmup.
-        # Dummy
-        max_total_tokens = int(os.getenv("MAX_TOTAL_TOKENS", "0"))
-        logger.info("MAX_TOTAL_TOKENS = {}".format(max_total_tokens))
 
         # TODO: by tokenizing all inputs at once we loose information on actual input lengths
         # this means that we cannot shift inputs to the left after a long input sequence
@@ -412,10 +401,6 @@ class CausalLMBatch(Batch):
             bucket_size = round_up(input_len + 1, PAD_SEQUENCE_TO_MULTIPLE_OF) - 1
             left_padding = bucket_size - input_len
 
-        extra_padding = 0
-        if is_optimized_for_gaudi and max_total_tokens > 0:
-            extra_padding = max(extra_padding, max_total_tokens - (bucket_size + 1) - max_new_tokens)
-
         input_ids = tokenized_inputs["input_ids"]
         attention_mask = tokenized_inputs["attention_mask"]
 
@@ -428,7 +413,7 @@ class CausalLMBatch(Batch):
                 attention_mask, (left_padding, 1), value=0
             )
             all_input_ids = torch.nn.functional.pad(
-                input_ids, (0, max_new_tokens + extra_padding), value=tokenizer.pad_token_id
+                input_ids, (0, max_new_tokens), value=tokenizer.pad_token_id
             ).T.split(1, dim=1)
         else:
             all_input_ids = input_ids.clone().T.split(1, dim=1)
@@ -459,7 +444,6 @@ class CausalLMBatch(Batch):
             top_n_tokens=top_n_tokens,
             top_n_tokens_tensor=top_n_tokens_tensor,
             input_length=input_len,
-            right_padding=max_new_tokens + extra_padding if is_optimized_for_gaudi else 0
         )
 
     @tracer.start_as_current_span("filter")
@@ -488,6 +472,10 @@ class CausalLMBatch(Batch):
     @property
     def seq_length(self):
         return self.attention_mask.size(1)
+
+    @property
+    def right_padding(self):
+        return self.seq_length - self.input_length
 
     # Maximum number of tokens this batch will grow to
     @property
@@ -897,8 +885,6 @@ class CausalLM(Model):
 
         # Adjust lengths
         batch.input_length += 1
-        if batch.right_padding > 0:
-            batch.right_padding -= 1
 
         # Update position_ids
         if prefill:
