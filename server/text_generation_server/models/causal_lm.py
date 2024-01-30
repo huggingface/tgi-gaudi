@@ -286,16 +286,16 @@ class CausalLMBatch(Batch):
         src = [b.input_ids for b in batches]
         for b in batches:
             del b.input_ids
-        src = shift_all(src, seq_dim, offsets)
         src = pad_tensors(src, extra_padding, seq_dim, pad_token_id)
+        src = shift_all(src, seq_dim, offsets)
         input_ids = prepare_memory(new_bs, src[target_batch_idx], inplace)
         input_ids = move_data(input_ids, 1, indices, src)
 
         src = [b.attention_mask for b in batches]
         for b in batches:
             del b.attention_mask
-        src = shift_all(src, seq_dim, offsets)
         src = pad_tensors(src, extra_padding, seq_dim, 0)
+        src = shift_all(src, seq_dim, offsets)
         attention_mask = prepare_memory(new_bs, src[target_batch_idx], inplace)
         attention_mask = move_data(attention_mask, 1, indices, src)
 
@@ -313,9 +313,9 @@ class CausalLMBatch(Batch):
 
         src_keys = [torch.stack(src) for src in src_keys]
         htorch.core.mark_step()
-        src_keys = shift_all(src_keys, key_dim, offsets)
-        htorch.core.mark_step()
         src_keys = pad_tensors(src_keys, extra_padding, key_dim, 0)
+        htorch.core.mark_step()
+        src_keys = shift_all(src_keys, key_dim, offsets)
         htorch.core.mark_step()
         src_keys = [[t.squeeze(0).clone() for t in torch.split(src, 1)] for src in src_keys]
         htorch.core.mark_step()
@@ -325,9 +325,9 @@ class CausalLMBatch(Batch):
 
         src_values = [torch.stack(src) for src in src_values]
         htorch.core.mark_step()
-        src_values = shift_all(src_values, value_dim, offsets)
-        htorch.core.mark_step()
         src_values = pad_tensors(src_values, extra_padding, value_dim, 0)
+        htorch.core.mark_step()
+        src_values = shift_all(src_values, value_dim, offsets)
         htorch.core.mark_step()
         src_values = [[t.squeeze(0).clone() for t in torch.split(src, 1)] for src in src_values]
         htorch.core.mark_step()
