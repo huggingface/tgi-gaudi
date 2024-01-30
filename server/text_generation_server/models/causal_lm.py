@@ -314,9 +314,7 @@ class CausalLMBatch(Batch):
         src_keys = [torch.stack(src) for src in src_keys]
         htorch.core.mark_step()
         src_keys = pad_tensors(src_keys, extra_padding, key_dim, 0)
-        htorch.core.mark_step()
         src_keys = shift_all(src_keys, key_dim, offsets)
-        htorch.core.mark_step()
         src_keys = [[t.squeeze(0).clone() for t in torch.split(src, 1)] for src in src_keys]
         htorch.core.mark_step()
 
@@ -326,9 +324,7 @@ class CausalLMBatch(Batch):
         src_values = [torch.stack(src) for src in src_values]
         htorch.core.mark_step()
         src_values = pad_tensors(src_values, extra_padding, value_dim, 0)
-        htorch.core.mark_step()
         src_values = shift_all(src_values, value_dim, offsets)
-        htorch.core.mark_step()
         src_values = [[t.squeeze(0).clone() for t in torch.split(src, 1)] for src in src_values]
         htorch.core.mark_step()
 
