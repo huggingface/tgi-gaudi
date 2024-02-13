@@ -639,6 +639,7 @@ class CausalLM(Model):
             self.hb_profer = None
             self.hb_profer_started = False
         self.step = 0
+        self._shifting_warmup_done = False
 
     def setup_quantization(self, model):
         if hq_env.is_quantization_enabled:
@@ -959,3 +960,18 @@ class CausalLM(Model):
             self.hb_profer_started = False
 
         return generations, batch if not stopped else None
+
+    def warmup(self, batch: CausalLMBatch):
+        # prefill
+        _, batch = self.generate_token([batch])
+        # decodes
+        while batch is not None:
+            _, batch = self.generate_token([batch])
+
+        self.shifting_warmup()
+
+    def shifting_warmup(self):
+        if self._shifting_warmup_done:
+            return
+
+        # TODO: add warmup for all possible shift variants
