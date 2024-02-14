@@ -961,16 +961,25 @@ class CausalLM(Model):
 
         return generations, batch if not stopped else None
 
-    def warmup(self, batch: CausalLMBatch):
-        # prefill
-        _, batch = self.generate_token([batch])
-        # decodes
-        while batch is not None:
-            _, batch = self.generate_token([batch])
-
+    def warmup(self, batches: List[CausalLMBatch]) -> None:
         self.shifting_warmup()
 
-    def shifting_warmup(self):
+        if len(batches) < 2:
+            return
+
+        # prefill
+        _, prefill_batch = self.generate_token([batches[0]])
+        # decode
+        _, decode_batch = self.generate_token([prefill_batch])
+        # prefill
+        _, prefill_batch = self.generate_token([batches[1]])
+        # concatenate and decode
+        _, decode_batch = self.generate_token([decode_batch, prefill_batch])
+        # decodes
+        while decode_batch is not None:
+            _, decode_batch = self.generate_token([decode_batch])
+
+    def shifting_warmup(self) -> None:
         if self._shifting_warmup_done:
             return
 

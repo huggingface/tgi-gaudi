@@ -104,16 +104,20 @@ impl Client {
     pub async fn warmup(
         &mut self,
         max_input_length: u32,
-        #[allow(unused_variables)] max_prefill_tokens: u32,
+        max_prefill_tokens: u32,
         max_total_tokens: u32,
     ) -> Result<Option<u32>> {
+        let read_env_var = |key: &str, default: u32| -> u32 {
+            env::var(key).ok().map_or(default, |value| value.parse::<u32>().unwrap())
+        };
+
         // get all possible prefill batch sizes
         let max_prefill_batch_size: u32 = max_prefill_tokens / max_input_length;
-        let prefill_bucket_size: u32 = env::var("PREFILL_BATCH_BUCKET_SIZE").ok().map_or(1, |value| value.parse::<u32>().unwrap());
+        let prefill_bucket_size: u32 = read_env_var("PREFILL_BATCH_BUCKET_SIZE", 1);
         let batch_sizes: Vec<u32> = (1..max_prefill_batch_size+1).step_by(prefill_bucket_size as usize).collect();
 
         // get all possible sequence lengths for prefill
-        let seq_bucket_size: u32 = env::var("PAD_SEQUENCE_TO_MULTIPLE_OF").ok().map_or(128, |value| value.parse::<u32>().unwrap());
+        let seq_bucket_size: u32 = read_env_var("PAD_SEQUENCE_TO_MULTIPLE_OF", 128);
         let seq_lengths: Vec<u32> = (seq_bucket_size..max_input_length+1).step_by(seq_bucket_size as usize).collect();
 
         // execute batch for each combination of batch size and sequence length
@@ -124,11 +128,16 @@ impl Client {
             }
         }
 
-        for (id, shape) in shapes.iter().enumerate() {
-            let batch = self.create_warmup_batch(*shape, id, max_input_length, max_total_tokens, seq_bucket_size);
-            let request = tonic::Request::new(WarmupRequest { batch: Some(batch) }).inject_context();
+        let mut id_counter: u64 = 0;
+        for shape in shapes.iter() {
+            let batches: Vec<Batch> = vec![
+                self.create_warmup_batch(*shape, &mut id_counter, max_input_length, max_total_tokens, seq_bucket_size),
+                self.create_warmup_batch(*shape, &mut id_counter, max_input_length, max_total_tokens, seq_bucket_size)
+            ];
+            let request = tonic::Request::new(WarmupRequest { batches }).inject_context();
             let _response = self.stub.warmup(request).await?.into_inner();
         }
+
         Ok(None) // No support for maximum total tokens
     }
 
@@ -136,36 +145,18 @@ impl Client {
     fn create_warmup_batch(
         &mut self,
         shape: (u32, u32),
-        id: usize,
+        id_counter: &mut u64,
         max_input_length: u32,
         max_total_tokens: u32,
         seq_bucket_size: u32,
     ) -> Batch {
+        *id_counter += 1;
         let (batch_size, input_length) = shape;
-        let skip_tokenizer_in_tgi = env::var("SKIP_TOKENIZER_IN_TGI")
-            .ok()
-            .map_or(false, |value| value.to_lowercase() == "true");
-        let inputs = if skip_tokenizer_in_tgi {
-            // generate random tokens
-            let mut rng = rand::thread_rng();
-            let range = Uniform::new(2, 30000);
-            let tokens = input_length - seq_bucket_size / 2;
-            (0..tokens)
-                .map(|_| rng.sample(&range).to_string())
-                .collect::<Vec<String>>()
-                .join(", ")
-        } else {
-            // repeat test string to get expected input shape
-            let bucket_id = input_length / seq_bucket_size;
-            let repeats = cmp::max(1, (bucket_id - 1) * seq_bucket_size / 2);
-            "_test ".to_string().repeat(repeats as usize)
-        };
-
         let mut requests = Vec::new();
         for i in 0..batch_size {
             requests.push(Request {
-                id: i as u64,
-                inputs: inputs.clone(),
+                id: *id_counter + i as u64,
+                inputs: self.get_random_input(input_length, seq_bucket_size),
                 truncate: max_input_length,
                 parameters: Some(NextTokenChooserParameters {
                     temperature: 1.0,
@@ -188,10 +179,36 @@ impl Client {
         }
 
         Batch {
-            id: id as u64,
+            id: *id_counter,
             size: requests.len() as u32,
             requests,
             max_tokens: max_total_tokens,
+        }
+    }
+
+    #[instrument(skip_all)]
+    fn get_random_input(
+        &mut self,
+        input_length: u32,
+        seq_bucket_size: u32,
+    ) -> String {
+        let skip_tokenizer_in_tgi: bool = env::var("SKIP_TOKENIZER_IN_TGI")
+            .ok()
+            .map_or(false, |value| value.to_lowercase() == "true");
+        if skip_tokenizer_in_tgi {
+            // generate random tokens
+            let mut rng = rand::thread_rng();
+            let range = Uniform::new(2, 30000);
+            let tokens = input_length - seq_bucket_size / 2;
+            (0..tokens)
+                .map(|_| rng.sample(&range).to_string())
+                .collect::<Vec<String>>()
+                .join(", ")
+        } else {
+            // repeat test string to get expected input shape
+            let bucket_id = input_length / seq_bucket_size;
+            let repeats = cmp::max(1, (bucket_id - 1) * seq_bucket_size / 2);
+            "_test ".to_string().repeat(repeats as usize)
         }
     }
 

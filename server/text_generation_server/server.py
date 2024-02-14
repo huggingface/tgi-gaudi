@@ -67,11 +67,14 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
             return generate_pb2.FilterBatchResponse(batch=filtered_batch.to_pb())
 
     async def Warmup(self, request, context):
-        batch = self.model.batch_type.from_pb(
-            request.batch, self.model.tokenizer, self.model.dtype, self.model.device, self.model.is_optimized_for_gaudi
-        )
+        def batch_from_pb(batch):
+            return self.model.batch_type.from_pb(
+                batch, self.model.tokenizer, self.model.dtype, self.model.device, self.model.is_optimized_for_gaudi
+            )
+
         with self.profiler.record_event("external", "warmup"):
-            self.model.warmup(batch)
+            batches = [batch_from_pb(batch) for batch in request.batches]
+            self.model.warmup(batches)
 
             return generate_pb2.WarmupResponse()
 
