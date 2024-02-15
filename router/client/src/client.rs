@@ -107,6 +107,11 @@ impl Client {
         max_prefill_tokens: u32,
         max_total_tokens: u32,
     ) -> Result<Option<u32>> {
+        let warmup_enabled: bool = env::var("WARMUP_ENABLED").ok().map_or(true, |value| value.to_lowercase() == "true");
+        if !warmup_enabled {
+            return Ok(None);
+        }
+
         let read_env_var = |key: &str, default: u32| -> u32 {
             env::var(key).ok().map_or(default, |value| value.parse::<u32>().unwrap())
         };
