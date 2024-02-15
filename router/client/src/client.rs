@@ -130,6 +130,7 @@ impl Client {
 
         let mut id_counter: u64 = 0;
         for shape in shapes.iter() {
+            // create two batches in order to trigger concatenate operation
             let batches: Vec<Batch> = vec![
                 self.create_warmup_batch(*shape, &mut id_counter, max_input_length, max_total_tokens, seq_bucket_size),
                 self.create_warmup_batch(*shape, &mut id_counter, max_input_length, max_total_tokens, seq_bucket_size)
@@ -153,9 +154,9 @@ impl Client {
         *id_counter += 1;
         let (batch_size, input_length) = shape;
         let mut requests = Vec::new();
-        for i in 0..batch_size {
+        for request_id in 0..batch_size {
             requests.push(Request {
-                id: *id_counter + i as u64,
+                id: *id_counter + request_id as u64,
                 inputs: self.get_random_input(input_length, seq_bucket_size),
                 truncate: max_input_length,
                 parameters: Some(NextTokenChooserParameters {
@@ -198,7 +199,7 @@ impl Client {
         if skip_tokenizer_in_tgi {
             // generate random tokens
             let mut rng = rand::thread_rng();
-            let range = Uniform::new(2, 30000);
+            let range = Uniform::new(2, 8192);
             let tokens = input_length - seq_bucket_size / 2;
             (0..tokens)
                 .map(|_| rng.sample(&range).to_string())
