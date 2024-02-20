@@ -368,6 +368,8 @@ class CausalLMBatch(Batch):
 
     @classmethod
     def recombine(cls, batches: List["CausalLMBatch"], pad_token_id: int) -> "CausalLMBatch":
+        dbg_trace("RECOMBINE start")
+
         total_requests = sum(len(b) for b in batches)
         new_bs = round_up(total_requests, BATCH_BUCKET_SIZE)
         batch_id = batches[0].batch_id
@@ -432,6 +434,7 @@ class CausalLMBatch(Batch):
         input_length = max_input_length
 
         htorch.core.mark_step()
+        dbg_trace("RECOMBINE start")
 
         return cls(
             batch_id=batch_id,
@@ -806,7 +809,7 @@ class CausalLM(Model):
         generations: List[Generation] = []
         prev_batches = []
         requests_to_generate = []
-
+        dbg_trace("GENERATE_TOKEN start")
         # In order to pipeline any actions on CPU we perform the operation in 3 main stages:
         # Stage 1. Collect next token ids of any previously started generations
         for batch_id, batch in enumerate(batches):
@@ -1030,32 +1033,25 @@ class CausalLM(Model):
             req.input_length = new_input_length
             req.prefix_offset = prefix_offset
             req.read_offset = read_offset
-            htorch.core.mark_step()
+        htorch.core.mark_step()
         self.step = self.step + 1
         if self.hb_profiler is not None:
             if self.step > self.profiling_wait_steps + self.profiling_warmup_steps + self.profiling_steps:
                 self.hb_profiler.stop()
             else:
                 self.hb_profiler.step()
+        dbg_trace("GENERATE_TOKEN stop")
+
         return generations, batch if not stopped else None
 
     def warmup(self, batches: List[CausalLMBatch]) -> None:
-        number_of_batches = len(batches)
-        if number_of_batches < 2:
+        if len(batches) < 2:
             return
 
         # prefill
         _, prefill_batch = self.generate_token([batches.pop(0)])
-
-        if number_of_batches == 2:
-            # decode
-            _, decode_batch = self.generate_token([prefill_batch])
-        else:
-            # second prefill
-            _, prefill_batch_2 = self.generate_token([batches.pop(0)])
-            # concatenate and decode
-            _, decode_batch = self.generate_token([prefill_batch, prefill_batch_2])
-
+        # decode
+        _, decode_batch = self.generate_token([prefill_batch])
         # shifts
         self.shifting_warmup(decode_batch)
         # prefill

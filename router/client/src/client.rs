@@ -144,17 +144,6 @@ impl Client {
             let _response = self.stub.warmup(request).await?.into_inner();
         }
 
-       for seq_length in seq_lengths {
-            // create three batches in order to trigger concatenate operation with two prefill batches
-            let batches: Vec<Batch> = vec![
-                self.create_warmup_batch((1, seq_length), &mut id_counter, max_input_length, max_total_tokens, seq_bucket_size),
-                self.create_warmup_batch((max_prefill_batch_size, seq_length), &mut id_counter, max_input_length, max_total_tokens, seq_bucket_size),
-                self.create_warmup_batch((max_prefill_batch_size, seq_length), &mut id_counter, max_input_length, max_total_tokens, seq_bucket_size)
-            ];
-            let request = tonic::Request::new(WarmupRequest { batches }).inject_context();
-            let _response = self.stub.warmup(request).await?.into_inner();
-        }
-
         Ok(None) // No support for maximum total tokens
     }
 
