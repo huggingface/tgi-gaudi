@@ -1029,7 +1029,7 @@ class CausalLM(Model):
             req.input_length = new_input_length
             req.prefix_offset = prefix_offset
             req.read_offset = read_offset
-        htorch.core.mark_step()
+            htorch.core.mark_step()
         self.step = self.step + 1
         if self.hb_profiler is not None:
             if self.step > self.profiling_wait_steps + self.profiling_warmup_steps + self.profiling_steps:
