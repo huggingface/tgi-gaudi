@@ -368,7 +368,7 @@ class CausalLMBatch(Batch):
 
     @classmethod
     def recombine(cls, batches: List["CausalLMBatch"], pad_token_id: int) -> "CausalLMBatch":
-        dbg_trace("RECOMBINE start")
+        dbg_trace("RECOMBINE", "start")
 
         total_requests = sum(len(b) for b in batches)
         new_bs = round_up(total_requests, BATCH_BUCKET_SIZE)
@@ -434,7 +434,7 @@ class CausalLMBatch(Batch):
         input_length = max_input_length
 
         htorch.core.mark_step()
-        dbg_trace("RECOMBINE start")
+        dbg_trace("RECOMBINE", "stop")
 
         return cls(
             batch_id=batch_id,
@@ -809,7 +809,7 @@ class CausalLM(Model):
         generations: List[Generation] = []
         prev_batches = []
         requests_to_generate = []
-        dbg_trace("GENERATE_TOKEN start")
+        dbg_trace("GENERATE_TOKEN", "start")
         # In order to pipeline any actions on CPU we perform the operation in 3 main stages:
         # Stage 1. Collect next token ids of any previously started generations
         for batch_id, batch in enumerate(batches):
@@ -1040,7 +1040,7 @@ class CausalLM(Model):
                 self.hb_profiler.stop()
             else:
                 self.hb_profiler.step()
-        dbg_trace("GENERATE_TOKEN stop")
+        dbg_trace("GENERATE_TOKEN", "stop")
 
         return generations, batch if not stopped else None
 
