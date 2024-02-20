@@ -366,7 +366,6 @@ class CausalLMBatch(Batch):
             dst_tensors[:3] = grouped_move(dst_tensors[:3], dst_dims[:3], dst_indices, src_tensors[:3], src_dims[:3], src_indices)
         self.set_tensor_groups(dst_tensors)
 
-
     @classmethod
     def recombine(cls, batches: List["CausalLMBatch"], pad_token_id: int) -> "CausalLMBatch":
         total_requests = sum(len(b) for b in batches)
