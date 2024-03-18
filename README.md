@@ -102,6 +102,7 @@ Currently supported and validated configurations (other configurations are not g
     * Max input tokens: 1024
     * Max total tokens: 2048
 
+Other sequence lengths can be used with proportionally decreased/increased batch size (the higher sequence length, the lower batch size).
 Support for other models from Optimum Habana will be added successively.
 
 ## Environment variables
