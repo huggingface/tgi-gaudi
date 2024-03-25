@@ -28,12 +28,17 @@ limitations under the License.
 
 To use [🤗 text-generation-inference](https://github.com/huggingface/text-generation-inference) on Habana Gaudi/Gaudi2, follow these steps:
 
-1. Build the Docker image located in this folder with:
+1. Pull the official Docker image with:
    ```bash
-   docker build -t tgi_gaudi .
+   docker pull ghcr.io/huggingface/tgi-gaudi:1.2.1
    ```
+   > [!NOTE]
+   > Alternatively, you can build the Docker image using the `Dockerfile` located in this folder with:
+   > ```bash
+   > docker build -t tgi_gaudi .
+   > ```
 2. Launch a local server instance:
-    
+
     i. On 1 Gaudi/Gaudi2 card
    ```bash
    model=meta-llama/Llama-2-7b-hf
