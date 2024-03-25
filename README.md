@@ -32,11 +32,11 @@ To use [🤗 text-generation-inference](https://github.com/huggingface/text-gene
    ```bash
    docker pull ghcr.io/huggingface/tgi-gaudi:1.2.1
    ```
-   > [!NOTE]
-   > Alternatively, you can build the Docker image using the `Dockerfile` located in this folder with:
-   > ```bash
-   > docker build -t tgi_gaudi .
-   > ```
+> [!NOTE]
+> Alternatively, you can build the Docker image using the `Dockerfile` located in this folder with:
+> ```bash
+> docker build -t tgi_gaudi .
+> ```
 2. Launch a local server instance:
 
     i. On 1 Gaudi/Gaudi2 card
