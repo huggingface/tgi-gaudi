@@ -26,7 +26,7 @@ def default_pb_request(default_pb_parameters, default_pb_stop_parameters):
         id=0,
         inputs="Test",
         prefill_logprobs=True,
-        truncate=100,
+        truncate=128, # TODO:think it through
         parameters=default_pb_parameters,
         stopping_parameters=default_pb_stop_parameters,
     )
@@ -40,7 +40,7 @@ def default_pb_batch(default_pb_request):
 @pytest.fixture
 def default_causal_lm_batch(default_pb_batch, gpt2_tokenizer):
     return CausalLMBatch.from_pb(
-        default_pb_batch, gpt2_tokenizer, torch.float32, torch.device("cpu")
+        default_pb_batch, gpt2_tokenizer, torch.float32, torch.device("hpu")
     )
 
 
@@ -54,7 +54,7 @@ def default_multi_requests_causal_lm_batch(default_pb_request, gpt2_tokenizer):
 
     batch_pb = generate_pb2.Batch(id=1, requests=[req_0, req_1], size=2)
     return CausalLMBatch.from_pb(
-        batch_pb, gpt2_tokenizer, torch.float32, torch.device("cpu")
+        batch_pb, gpt2_tokenizer, torch.float32, torch.device("hpu")
     )
 
 
