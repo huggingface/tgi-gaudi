@@ -5,8 +5,7 @@ from copy import copy
 from transformers import AutoTokenizer
 
 from text_generation_server.pb import generate_pb2
-from text_generation_server.models.causal_lm import CausalLM, CausalLMBatch
-
+from text_generation_server.models.causal_lm import CausalLM, CausalLMBatch, PREFILL_BATCH_BUCKET_SIZE
 
 @pytest.fixture(scope="session")
 def default_causal_lm():
@@ -65,10 +64,13 @@ def test_batch_from_pb(default_pb_batch, default_causal_lm_batch):
     assert len(batch.requests) == len(default_pb_batch.requests)
 
     for r in range(0,len(default_pb_batch.requests)):
-        assert batch.requests[r] == default_pb_batch.requests[r]
-#    assert batch.requests == default_pb_batch.requests
+        assert batch.requests[r].data == default_pb_batch.requests[r]
 
-    assert len(batch.input_ids) == default_pb_batch.size
+    # For Gaudi we are adding padding of multiplication of bucket size
+    size_of_padded_to_bucket = ((default_pb_batch.size + PREFILL_BATCH_BUCKET_SIZE - 1) // PREFILL_BATCH_BUCKET_SIZE) * PREFILL_BATCH_BUCKET_SIZE
+
+    assert len(batch.input_ids) == size_of_padded_to_bucket 
+
     assert batch.input_ids[0][-1] == 14402
     assert torch.all(batch.input_ids[0][:-1] == 50256)
 
