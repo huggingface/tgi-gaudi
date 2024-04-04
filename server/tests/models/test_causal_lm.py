@@ -62,7 +62,11 @@ def test_batch_from_pb(default_pb_batch, default_causal_lm_batch):
     batch = default_causal_lm_batch
 
     assert batch.batch_id == default_pb_batch.id
-    assert batch.requests == default_pb_batch.requests
+    assert len(batch.requests) == len(default_pb_batch.requests)
+
+    for r in 0..len(default_pb_batch.requests):
+        assert batch.requests[r] == default_pb_batch.requests[r]
+#    assert batch.requests == default_pb_batch.requests
 
     assert len(batch.input_ids) == default_pb_batch.size
     assert batch.input_ids[0][-1] == 14402
