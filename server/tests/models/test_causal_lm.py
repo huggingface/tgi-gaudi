@@ -5,7 +5,7 @@ from copy import copy
 from transformers import AutoTokenizer
 
 from text_generation_server.pb import generate_pb2
-from text_generation_server.models.causal_lm import CausalLM, CausalLMBatch, PREFILL_BATCH_BUCKET_SIZE
+from text_generation_server.models.causal_lm import CausalLM, CausalLMBatch, PREFILL_BATCH_BUCKET_SIZE,PAD_SEQUENCE_TO_MULTIPLE_OF
 
 @pytest.fixture(scope="session")
 def default_causal_lm():
@@ -25,7 +25,7 @@ def default_pb_request(default_pb_parameters, default_pb_stop_parameters):
         id=0,
         inputs="Test",
         prefill_logprobs=True,
-        truncate=128, # TODO:think it through
+        truncate=PAD_SEQUENCE_TO_MULTIPLE_OF,
         parameters=default_pb_parameters,
         stopping_parameters=default_pb_stop_parameters,
     )
