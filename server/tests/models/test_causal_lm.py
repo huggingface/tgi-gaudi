@@ -78,16 +78,14 @@ def test_batch_from_pb(default_pb_batch, default_causal_lm_batch):
     assert torch.all(batch.attention_mask[0, 1:] == 0)
 
     assert batch.past_key_values is None
-
-    assert all(
+    assert all(   
         [
-            torch.equal(input_ids, all_input_ids[:, 0])
-            for input_ids, all_input_ids in zip(batch.input_ids, batch.all_input_ids)
+            torch.equal(input_ids, request.all_input_ids[:, 0])
+            for input_ids, request in zip(batch.input_ids, batch.requests)
         ]
     )
 
     assert len(batch) == default_pb_batch.size
-    assert len(batch.next_token_choosers) == len(batch.stopping_criterias) == len(batch)
 
     # max_input_length is padded input tokens area , so to match truncate this max_input_length
     # has to be increased by 1 (for output token)
