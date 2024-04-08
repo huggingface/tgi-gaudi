@@ -86,12 +86,12 @@ def test_batch_from_pb(default_pb_batch, default_causal_lm_batch):
         ]
     )
 
-    assert batch.input_lengths == [1]
-
     assert len(batch) == default_pb_batch.size
     assert len(batch.next_token_choosers) == len(batch.stopping_criterias) == len(batch)
 
-    assert batch.max_input_length == batch.input_lengths[0]
+    # max_input_length is padded input tokens area , so to match truncate this max_input_length
+    # has to be increased by 1 (for output token)
+    assert batch.max_input_length + 1 == default_pb_batch.requests[0].truncate
 
 
 def test_batch_concatenate_no_prefill(default_causal_lm_batch):
