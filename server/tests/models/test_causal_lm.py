@@ -78,16 +78,16 @@ def test_batch_from_pb(default_pb_batch, default_causal_lm_batch):
 
     assert len(batch.input_ids) == size_of_padded_to_bucket 
 
-    assert batch.input_ids[0][-1] == 14402
-    assert torch.all(batch.input_ids[0][:-1] == 50256)
+    assert batch.input_ids[0][-2] == 14402
+    assert torch.all(batch.input_ids[0][:-2] == 50256)
 
-    assert batch.attention_mask[0, 0] == 1
-    assert torch.all(batch.attention_mask[0, 1:] == 0)
+    assert batch.attention_mask[0, -2] == 1
+    assert torch.all(batch.attention_mask[0, :-2] == 0)
 
     assert batch.past_key_values is None
     assert all(   
         [
-            torch.equal(input_ids, request.all_input_ids[:, 0])
+            torch.equal(input_ids, request.all_input_ids[:-10,0])
             for input_ids, request in zip(batch.input_ids, batch.requests)
         ]
     )
