@@ -592,6 +592,26 @@ class CausalLMBatch(Batch):
         max_total_tokens = self.attention_mask.size(1)
         return len(self.requests) * max_total_tokens
 
+@dataclass
+class CausalLMBatchGPTBigCode(CausalLMBatch):
+    past_key_values: Optional[List[torch.Tensor]]
+
+    def detach_kv_cache(self):
+        past_keys = []
+        past_values = []
+        last_dim = int(self.past_key_values[0].size(dim=-1)/2)
+        for key_value in self.past_key_values:
+            past_keys.append(key_value.split((last_dim, last_dim), dim=-1)[0])
+            past_values.append(key_value.split((last_dim, last_dim), dim=-1)[1])
+        del self.past_key_values
+
+        return past_keys, past_values
+
+    def attach_kv_cache(self, past_keys, past_values):
+        self.past_key_values = []
+        for key_tensor, value_tensor in zip(past_keys, past_values):
+            self.past_key_values.append(torch.cat((key_tensor, value_tensor), dim = -1))
+
 
 class CausalLM(Model):
     def __init__(
@@ -818,6 +838,8 @@ class CausalLM(Model):
 
     @property
     def batch_type(self) -> Type[CausalLMBatch]:
+        if self.model.config.model_type == "gpt_bigcode":
+            return CausalLMBatchGPTBigCode
         return CausalLMBatch
 
     def decode(self, generated_ids: List[int]) -> str:
