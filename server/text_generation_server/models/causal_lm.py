@@ -199,11 +199,16 @@ def remove_kv_cache_from_output(module):
 class CausalLMRequest:
     idx: int
     data: generate_pb2.Request
+
+    # Lengths of all generations present in the batch
     input_length: int
     prefix_offset: int
     read_offset: int
-    stopping_criteria: StoppingCriteria
 
+    # Generation helpers
+    stopping_criteria: StoppingCriteria
+    
+    # All tokens
     all_input_ids: torch.Tensor
 
     @classmethod
