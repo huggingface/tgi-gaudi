@@ -797,9 +797,11 @@ class CausalLM(Model):
         position_ids,
         token_idx,
         past_key_values: Optional = None,
-        bypass_hpu_graph: Optional = None,
+        bypass_hpu_graph: Optional[bool] = None,
     ) -> Tuple[torch.Tensor, List[Tuple[torch.Tensor, torch.Tensor]]]:
         # Model Forward
+
+        # Core Arguments
         kwargs = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
@@ -810,10 +812,11 @@ class CausalLM(Model):
         if self.has_position_ids:
             kwargs["position_ids"] = position_ids
 
-        if bypass_hpu_graph != None:
+        if bypass_hpu_graph is not None:
             kwargs["bypass_hpu_graphs"] = bypass_hpu_graph
 
         kwargs.update(self.kwargs)
+        
         if past_key_values is not None:
             return self.model.forward(**kwargs)
         else:
