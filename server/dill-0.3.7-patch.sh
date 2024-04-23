@@ -85,7 +85,6 @@ index 74234ab..1be8d89 100644
          return main
 
 EOF
-popd
 git apply dill-0.3.7.patch
 python -m pip install .
 popd
