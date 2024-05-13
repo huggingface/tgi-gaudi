@@ -11,12 +11,12 @@ import time
 from typing import Dict, List, Optional, Tuple, Type
 
 import torch
+import torch._dynamo
 from loguru import logger
 from opentelemetry import trace
 
 import text_generation_server.habana_quantization_env as hq_env
 import habana_frameworks.torch as htorch
-from habana_frameworks.torch.hpu import wrap_in_hpu_graph
 from optimum.habana.utils import HabanaProfile
 from optimum.habana.transformers.generation import MODELS_OPTIMIZED_WITH_STATIC_SHAPES
 from optimum.habana.checkpoint_utils import (
@@ -631,8 +631,14 @@ class CausalLM(Model):
         self.enable_hpu_graph = os.getenv("ENABLE_HPU_GRAPH", "true").lower() == "true"
         self.limit_hpu_graph = os.getenv("LIMIT_HPU_GRAPH", "false").lower() == "true"
         model = remove_kv_cache_from_output(model)
+#        import epdb; epdb.serve()
         if self.enable_hpu_graph:
+            print("==> HPU graphs")
+            from habana_frameworks.torch.hpu import wrap_in_hpu_graph
             model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
+        else:
+            print("==> Torch compile")
+#            model = torch.compile(model, backend = "hpu_backend")
 
         model = self.setup_quantization(model)
 
@@ -824,6 +830,9 @@ class CausalLM(Model):
         if bypass_hpu_graph != None:
             kwargs["bypass_hpu_graphs"] = bypass_hpu_graph
 
+        dbg_trace(
+            "FWD", f'bypass_hpu_graph:{bypass_hpu_graph}')
+
         kwargs.update(self.kwargs)
         if past_key_values is not None:
             return self.model.forward(**kwargs)
@@ -931,6 +940,7 @@ class CausalLM(Model):
         assert batch.right_padding > 0, 'No more room for next token!'
 
         # Execute batch
+#        import epdb; epdb.serve()
         if prefill:
             # no right padding for prefill
             token_idx = torch.tensor(batch.attention_mask.shape[-1] - 1).to(self.device)
