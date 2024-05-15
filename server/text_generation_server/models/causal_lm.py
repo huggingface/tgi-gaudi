@@ -653,10 +653,6 @@ class CausalLM(Model):
         self.enable_hpu_graph = os.getenv("ENABLE_HPU_GRAPH", "true").lower() == "true"
         self.limit_hpu_graph = os.getenv("LIMIT_HPU_GRAPH", "false").lower() == "true"
 
-        # Bypasses runtime error "Empty tensor optional" with hpu graphs
-        if model.config.model_type == "gpt_bigcode":
-            assert self.enable_hpu_graph == False, "HPU graphs are not supported with Starcoder model! Please use ENABLE_HPU_GRAPH=False flag"
-
         model = remove_kv_cache_from_output(model)
         if self.enable_hpu_graph:
             from habana_frameworks.torch.hpu import wrap_in_hpu_graph
