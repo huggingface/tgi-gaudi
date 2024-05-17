@@ -4,20 +4,16 @@ import pytest
 import torch
 
 from copy import copy
-from transformers import AutoTokenizer
 
 from text_generation_server.pb import generate_pb2
 from text_generation_server.models import get_model
 from text_generation_server.models.starcoder import StarCoderCausalLMBatch
 from text_generation_server.models.causal_lm import (
-    CausalLMBatch,
     PREFILL_BATCH_BUCKET_SIZE,
     PAD_SEQUENCE_TO_MULTIPLE_OF,
     MAX_TOTAL_TOKENS,
     BATCH_BUCKET_SIZE,
 )
-from text_generation_server.utils import weight_hub_files, download_weights
-from text_generation_server.models.starcoder import StarCoderCausalLMBatch, STARCODER
 PAD_TOKEN=0
 
 
