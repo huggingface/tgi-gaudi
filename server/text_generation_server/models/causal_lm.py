@@ -64,7 +64,7 @@ def round_up(number, k):
 
 
 def to_tensor_indices(indices, device):
-    return torch.tensor(indices, dtype=torch.int32, device=device)
+    return torch.tensor(indices, dtype=torch.long, device=device)
 
 
 def calculate_chunks(offset):
