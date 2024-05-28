@@ -1,6 +1,7 @@
 from loguru import logger
 import torch
 from dataclasses import dataclass
+import os
 from typing import List, Optional, Type
 
 from text_generation_server.models import CausalLM
@@ -34,15 +35,16 @@ class STARCODER(CausalLM):
         revision: Optional[str] = None,
         dtype: Optional[torch.dtype] = None,
     ):
+
+        # Bypasses runtime error "Empty tensor optional" with hpu graphs
+        os.environ["ENABLE_HPU_GRAPH"] = "false"
+        logger.warning("Disabling HPU graphs as they are not supported with Starcoder model!")
+
         super(STARCODER, self).__init__(
             model_id=model_id,
             revision=revision,
             dtype=dtype,
         )
-
-        # Bypasses runtime error "Empty tensor optional" with hpu graphs
-        self.enable_hpu_graph = False
-        logger.warning("Disabling HPU graphs as they are not supported with Starcoder model!")
 
     @property
     def batch_type(self) -> Type[CausalLMBatch]:
