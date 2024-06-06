@@ -84,7 +84,7 @@ def biggest_single_chunk(offset):
     else:
         return 0
 
-
+@torch.compile(backend = "hpu_backend", options={"keep_input_mutations": True}) # TODO: not for lazy
 def grouped_pad(tensor_groups, dims, values):
     grouped_result = []
     for tensors, dim, value in zip(tensor_groups, dims, values):
@@ -100,6 +100,7 @@ def grouped_pad(tensor_groups, dims, values):
     return grouped_result
 
 
+@torch.compile(backend = "hpu_backend", options={"keep_input_mutations": True}) # TODO: not for lazy
 def roll(tensor, chunk, dim, merge_graphs):
     if dim is None:
         return tensor
@@ -109,6 +110,7 @@ def roll(tensor, chunk, dim, merge_graphs):
     return tensor
 
 
+@torch.compile(backend = "hpu_backend", options={"keep_input_mutations": True}) # TODO: not for lazy
 def grouped_roll(tensor_groups, chunk, dims, merge_graphs):
     tensor_groups = [[roll(t, chunk, dim, merge_graphs) for t in tensors] for tensors, dim in zip(tensor_groups, dims)]
     if merge_graphs:
@@ -116,6 +118,7 @@ def grouped_roll(tensor_groups, chunk, dims, merge_graphs):
     return tensor_groups
 
 
+@torch.compile(backend = "hpu_backend", options={"keep_input_mutations": True}) # TODO: not for lazy
 def grouped_shift(tensor_groups, dims, offset, merge_graphs):
     chunks = calculate_chunks(offset)
     for c in chunks:
@@ -123,6 +126,7 @@ def grouped_shift(tensor_groups, dims, offset, merge_graphs):
     return tensor_groups
 
 
+@torch.compile(backend = "hpu_backend", options={"keep_input_mutations": True}) # TODO: not for lazy
 def move(dst_tensors, dst_indices, src_tensors):
     bs_dim = 0
     num_indices = dst_indices.size(0)
@@ -138,12 +142,14 @@ def grouped_move(dst_tensor_groups, dst_indices, src_tensor_groups):
         move(dst_tensors, dst_indices, src_tensors)
 
 
+@torch.compile(backend = "hpu_backend", options={"keep_input_mutations": True}) # TODO: not for lazy
 def extend_tensor(tensor, padding, dim):
     result = torch.cat([tensor, padding], dim=dim)
     htorch.core.mark_step()
     return result
 
 
+@torch.compile(backend = "hpu_backend", options={"keep_input_mutations": True}) # TODO: not for lazy
 def extend_batch(tensors, target_bs, dim):
     diff = target_bs - tensors[0].size(dim)
     # TODO: add support for shrinking bs
@@ -161,12 +167,14 @@ def grouped_extend_batch(tensor_groups, target_bs, bs_dims):
     return tensor_groups
 
 
+@torch.compile(backend = "hpu_backend", options={"keep_input_mutations": True}) # TODO: not for lazy
 def merge(tensor_group):
     tensor_group = [torch.stack(tensor_group)]
     htorch.core.mark_step()
     return tensor_group
 
 
+@torch.compile(backend = "hpu_backend", options={"keep_input_mutations": True}) # TODO: not for lazy
 def split(tensor_group, clone_data):
     tensor_group = [t.squeeze(0) for t in torch.split(tensor_group[0], 1)]
     if clone_data:
