@@ -64,7 +64,7 @@ def round_up(number, k):
 
 
 def to_tensor_indices(indices, device):
-    return torch.tensor(indices, dtype=torch.int32, device=device)
+    return torch.tensor(indices, dtype=torch.long, device=device)
 
 
 def calculate_chunks(offset):
@@ -468,6 +468,7 @@ class CausalLMBatch(Batch):
             tokenizer=tokenizer,
             quantization_enabled=hq_env.is_quantization_enabled,
         )
+#        import pdb;pdb.set_trace()
         tokenized_inputs = tokenizer(
             [r.data.inputs for r in requests] + dummy_inputs,
             return_tensors="pt",
@@ -631,14 +632,14 @@ class CausalLM(Model):
         self.enable_hpu_graph = os.getenv("ENABLE_HPU_GRAPH", "true").lower() == "true"
         self.limit_hpu_graph = os.getenv("LIMIT_HPU_GRAPH", "false").lower() == "true"
         model = remove_kv_cache_from_output(model)
-#        import epdb; epdb.serve()
         if self.enable_hpu_graph:
             print("==> HPU graphs")
             from habana_frameworks.torch.hpu import wrap_in_hpu_graph
             model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
         else:
             print("==> Torch compile")
-#            model = torch.compile(model, backend = "hpu_backend")
+            # It is said that "keep_input_mutations" is safe for inference to be done
+            model.model = torch.compile(model.model, backend="hpu_backend", options={"keep_input_mutations": True})
 
         model = self.setup_quantization(model)
 
@@ -815,13 +816,15 @@ class CausalLM(Model):
         token_idx,
         past_key_values: Optional[List[Tuple]] = None,
         bypass_hpu_graph: Optional[bool] = None,
+        lazy_mode = True,
     ) -> Tuple[torch.Tensor, List[Tuple[torch.Tensor, torch.Tensor]]]:
         # Model Forward
         kwargs = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "past_key_values": past_key_values,
-            "token_idx": token_idx
+            "token_idx": token_idx,
+            "lazy_mode": lazy_mode,
         }
 
         if self.has_position_ids:
@@ -940,7 +943,6 @@ class CausalLM(Model):
         assert batch.right_padding > 0, 'No more room for next token!'
 
         # Execute batch
-#        import epdb; epdb.serve()
         if prefill:
             # no right padding for prefill
             token_idx = torch.tensor(batch.attention_mask.shape[-1] - 1).to(self.device)
@@ -950,7 +952,8 @@ class CausalLM(Model):
                 batch.position_ids,
                 token_idx,
                 batch.past_key_values,
-                bypass_hpu_graph=prefill and self.limit_hpu_graph if self.enable_hpu_graph else None
+                bypass_hpu_graph=prefill and self.limit_hpu_graph if self.enable_hpu_graph else None,
+                lazy_mode=self.enable_hpu_graph,
             )
         else:
             token_idx = torch.tensor(batch.attention_mask.shape[-1] - batch.right_padding).to(self.device)
@@ -961,7 +964,8 @@ class CausalLM(Model):
                 batch.position_ids,
                 token_idx,
                 batch.past_key_values,
-                bypass_hpu_graph=prefill and self.limit_hpu_graph if self.enable_hpu_graph else None
+                bypass_hpu_graph=prefill and self.limit_hpu_graph if self.enable_hpu_graph else None,
+                lazy_mode=self.enable_hpu_graph
             )
 
         htorch.core.mark_step()
