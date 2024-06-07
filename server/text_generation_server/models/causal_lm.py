@@ -57,7 +57,17 @@ BATCH_BUCKET_SIZE = int(os.environ.get('BATCH_BUCKET_SIZE', 8))
 PAD_SEQUENCE_TO_MULTIPLE_OF = int(os.environ.get('PAD_SEQUENCE_TO_MULTIPLE_OF', 128))
 PREFILL_BATCH_BUCKET_SIZE = int(os.environ.get('PREFILL_BATCH_BUCKET_SIZE', 4))
 CHUNK_SIZES = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
+LAZY_MODE = int(os.environ.get('PT_HPU_LAZY_MODE', 1))
 
+# Put a synchronization point if we are operating in lazy mode
+def htmark_step():
+    if LAZY_MODE == 1:
+        htorch.core.mark_step()
+
+def torch_compile_for_eager(func):
+    if LAZY_MODE == 1:
+        return func
+    return torch.compile(func, backend="hpu_backend", options={"keep_input_mutations": True})
 
 def round_up(number, k):
     return (number + k - 1) // k * k
@@ -84,7 +94,7 @@ def biggest_single_chunk(offset):
     else:
         return 0
 
-@torch.compile(backend = "hpu_backend", options={"keep_input_mutations": True}) # TODO: not for lazy
+@torch_compile_for_eager
 def grouped_pad(tensor_groups, dims, values):
     grouped_result = []
     for tensors, dim, value in zip(tensor_groups, dims, values):
@@ -96,29 +106,29 @@ def grouped_pad(tensor_groups, dims, values):
         else:
             result = [t for t in tensors]
         grouped_result.append(result)
-        htorch.core.mark_step()
+        htmark_step()
     return grouped_result
 
 
-@torch.compile(backend = "hpu_backend", options={"keep_input_mutations": True}) # TODO: not for lazy
+@torch_compile_for_eager
 def roll(tensor, chunk, dim, merge_graphs):
     if dim is None:
         return tensor
     tensor = torch.roll(tensor, chunk, dim)
     if not merge_graphs:
-        htorch.core.mark_step()
+        htmark_step()
     return tensor
 
 
-@torch.compile(backend = "hpu_backend", options={"keep_input_mutations": True}) # TODO: not for lazy
+@torch_compile_for_eager
 def grouped_roll(tensor_groups, chunk, dims, merge_graphs):
     tensor_groups = [[roll(t, chunk, dim, merge_graphs) for t in tensors] for tensors, dim in zip(tensor_groups, dims)]
     if merge_graphs:
-        htorch.core.mark_step()
+        htmark_step()
     return tensor_groups
 
 
-@torch.compile(backend = "hpu_backend", options={"keep_input_mutations": True}) # TODO: not for lazy
+@torch_compile_for_eager
 def grouped_shift(tensor_groups, dims, offset, merge_graphs):
     chunks = calculate_chunks(offset)
     for c in chunks:
@@ -126,7 +136,7 @@ def grouped_shift(tensor_groups, dims, offset, merge_graphs):
     return tensor_groups
 
 
-@torch.compile(backend = "hpu_backend", options={"keep_input_mutations": True}) # TODO: not for lazy
+@torch_compile_for_eager
 def move(dst_tensors, dst_indices, src_tensors):
     bs_dim = 0
     num_indices = dst_indices.size(0)
@@ -134,7 +144,7 @@ def move(dst_tensors, dst_indices, src_tensors):
         if src_t.size(bs_dim) != num_indices:
             src_t = torch.narrow(src_t, bs_dim, 0, num_indices)
         dst_t.index_copy_(bs_dim, dst_indices, src_t)
-    htorch.core.mark_step()
+    htmark_step()
 
 
 def grouped_move(dst_tensor_groups, dst_indices, src_tensor_groups):
@@ -142,14 +152,14 @@ def grouped_move(dst_tensor_groups, dst_indices, src_tensor_groups):
         move(dst_tensors, dst_indices, src_tensors)
 
 
-@torch.compile(backend = "hpu_backend", options={"keep_input_mutations": True}) # TODO: not for lazy
+@torch_compile_for_eager
 def extend_tensor(tensor, padding, dim):
     result = torch.cat([tensor, padding], dim=dim)
-    htorch.core.mark_step()
+    htmark_step()
     return result
 
 
-@torch.compile(backend = "hpu_backend", options={"keep_input_mutations": True}) # TODO: not for lazy
+@torch_compile_for_eager
 def extend_batch(tensors, target_bs, dim):
     diff = target_bs - tensors[0].size(dim)
     # TODO: add support for shrinking bs
@@ -167,19 +177,19 @@ def grouped_extend_batch(tensor_groups, target_bs, bs_dims):
     return tensor_groups
 
 
-@torch.compile(backend = "hpu_backend", options={"keep_input_mutations": True}) # TODO: not for lazy
+@torch_compile_for_eager
 def merge(tensor_group):
     tensor_group = [torch.stack(tensor_group)]
-    htorch.core.mark_step()
+    htmark_step()
     return tensor_group
 
 
-@torch.compile(backend = "hpu_backend", options={"keep_input_mutations": True}) # TODO: not for lazy
+@torch_compile_for_eager
 def split(tensor_group, clone_data):
     tensor_group = [t.squeeze(0) for t in torch.split(tensor_group[0], 1)]
     if clone_data:
         tensor_group = [t.clone() for t in tensor_group]
-    htorch.core.mark_step()
+    htmark_step()
     return tensor_group
 
 
@@ -424,7 +434,7 @@ class CausalLMBatch(Batch):
         past_key_values = batches[dst_batch_idx].past_key_values
         input_length = max_input_length
 
-        htorch.core.mark_step()
+        htmark_step()
 
         return cls(
             batch_id=batch_id,
@@ -526,7 +536,7 @@ class CausalLMBatch(Batch):
         position_ids = attention_mask.long().cumsum(-1) - 1
         position_ids.masked_fill_(attention_mask == 0, 1)
 
-        htorch.core.mark_step()
+        htmark_step()
 
         return cls(
             batch_id=pb.id,
@@ -641,11 +651,9 @@ class CausalLM(Model):
         self.limit_hpu_graph = os.getenv("LIMIT_HPU_GRAPH", "false").lower() == "true"
         model = remove_kv_cache_from_output(model)
         if self.enable_hpu_graph:
-            print("==> HPU graphs")
             from habana_frameworks.torch.hpu import wrap_in_hpu_graph
             model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
         else:
-            print("==> Torch compile")
             # It is said that "keep_input_mutations" is safe for inference to be done
             model.model = torch.compile(model.model, backend="hpu_backend", options={"keep_input_mutations": True})
 
@@ -824,7 +832,6 @@ class CausalLM(Model):
         token_idx,
         past_key_values: Optional[List[Tuple]] = None,
         bypass_hpu_graph: Optional[bool] = None,
-        lazy_mode = True,
     ) -> Tuple[torch.Tensor, List[Tuple[torch.Tensor, torch.Tensor]]]:
         # Model Forward
         kwargs = {
@@ -832,7 +839,7 @@ class CausalLM(Model):
             "attention_mask": attention_mask,
             "past_key_values": past_key_values,
             "token_idx": token_idx,
-            "lazy_mode": lazy_mode,
+            "lazy_mode": LAZY_MODE == 1,
         }
 
         if self.has_position_ids:
@@ -911,7 +918,7 @@ class CausalLM(Model):
                         'top_token_logprobs': batch_top_token_logprobs[req_idx],
                     })
 
-                htorch.core.mark_step()
+                htmark_step()
 
                 # Add new token into input_ids
                 batch.input_ids.index_copy_(1, token_idx, next_token_ids.unsqueeze(1))
@@ -931,7 +938,7 @@ class CausalLM(Model):
                 if prefill:
                     batch.past_key_values = past
 
-        htorch.core.mark_step()
+        htmark_step()
 
         # Stage 2. Prepare new batch for speculative scheduling
         if len(batches) > 1:
@@ -961,7 +968,6 @@ class CausalLM(Model):
                 token_idx,
                 batch.past_key_values,
                 bypass_hpu_graph=prefill and self.limit_hpu_graph if self.enable_hpu_graph else None,
-                lazy_mode=self.enable_hpu_graph,
             )
         else:
             token_idx = torch.tensor(batch.attention_mask.shape[-1] - batch.right_padding).to(self.device)
@@ -973,10 +979,9 @@ class CausalLM(Model):
                 token_idx,
                 batch.past_key_values,
                 bypass_hpu_graph=prefill and self.limit_hpu_graph if self.enable_hpu_graph else None,
-                lazy_mode=self.enable_hpu_graph
             )
 
-        htorch.core.mark_step()
+        htmark_step()
 
         start_decode = time.time_ns()
 
@@ -985,7 +990,7 @@ class CausalLM(Model):
         for prev_batch in prev_batches:
             prev_batch['next_token_logprobs'] = prev_batch['next_token_logprobs'].tolist()
             prev_batch['next_token_ids_cpu'] = prev_batch['next_token_ids'].cpu()
-        htorch.core.mark_step()
+        htmark_step()
 
         for req_data in requests_to_generate:
             req = req_data['req']
@@ -1114,7 +1119,7 @@ class CausalLM(Model):
             req.prefix_offset = prefix_offset
             req.read_offset = read_offset
 
-        htorch.core.mark_step()
+        htmark_step()
         self.step = self.step + 1
         if self.hb_profiler is not None:
             if self.step > self.profiling_wait_steps + self.profiling_warmup_steps + self.profiling_steps:
