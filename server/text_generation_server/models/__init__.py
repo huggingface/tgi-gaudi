@@ -13,6 +13,7 @@ import text_generation_server.habana_quantization_env as hq_env
 from text_generation_server.utils.speculate import get_speculate, set_speculate
 from text_generation_server.models.model import Model
 from text_generation_server.models.causal_lm import CausalLM
+from text_generation_server.models.vlm_causal_lm import VlmCausalLM
 from text_generation_server.models.bloom import BLOOM
 from text_generation_server.models.santacoder import SantaCoder
 
@@ -96,6 +97,15 @@ def get_model(
 
     if model_type == "bloom":
         return BLOOM(
+            model_id,
+            revision,
+            use_medusa=use_medusa,
+            dtype=dtype,
+            trust_remote_code=trust_remote_code,
+        )
+
+    if model_type == "llava_next":
+        return VlmCausalLM(
             model_id,
             revision,
             use_medusa=use_medusa,
