@@ -482,7 +482,6 @@ class CausalLMBatch(Batch):
             tokenizer=tokenizer,
             quantization_enabled=hq_env.is_quantization_enabled,
         )
-#        import pdb;pdb.set_trace()
         tokenized_inputs = tokenizer(
             [r.data.inputs for r in requests] + dummy_inputs,
             return_tensors="pt",
@@ -652,6 +651,8 @@ class CausalLM(Model):
         else:
             if LAZY_MODE == 0: 
                 # It is said that "keep_input_mutations" is safe for inference to be done
+                dbg_trace(
+                    "FWD", f'Torch compiling of model')
                 model.model = torch.compile(model.model, backend="hpu_backend", options={"keep_input_mutations": True})
 
         model = self.setup_quantization(model)
@@ -843,9 +844,6 @@ class CausalLM(Model):
 
         if bypass_hpu_graph != None:
             kwargs["bypass_hpu_graphs"] = bypass_hpu_graph
-
-        dbg_trace(
-            "FWD", f'bypass_hpu_graph:{bypass_hpu_graph}')
 
         kwargs.update(self.kwargs)
         if past_key_values is not None:
