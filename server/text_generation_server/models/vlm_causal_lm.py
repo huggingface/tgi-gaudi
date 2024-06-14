@@ -1,6 +1,7 @@
 import re
 import torch
 import math
+import os
 from PIL import Image
 from io import BytesIO
 import base64
@@ -8,16 +9,16 @@ import base64
 from opentelemetry import trace
 from typing import Optional, Tuple, List, Type, Dict
 
-from transformers import PreTrainedTokenizerBase
+import text_generation_server.habana_quantization_env as hq_env
+from transformers import PreTrainedTokenizerBase, LlavaNextForConditionalGeneration, AutoTokenizer, AutoConfig
 from transformers.image_processing_utils import select_best_resolution
 from text_generation_server.pb import generate_pb2
-from text_generation_server.models.flash_mistral import (
-    BaseFlashMistral,
-    FlashMistralBatch,
-)
 from text_generation_server.models.cache_manager import (
     get_cache_manager,
 )
+from text_generation_server.utils import make_tokenizer_optional
+from optimum.habana.checkpoint_utils import get_repo_root
+from .causal_lm import CausalLM, CausalLMBatch
 
 tracer = trace.get_tracer(__name__)
 
@@ -136,7 +137,7 @@ def load_data_uri(image_uri: str) -> Image.Image:
     return image
 
 
-class VlmCausalLMBatch(FlashMistralBatch):
+class VlmCausalLMBatch(CausalLMBatch):
     pixel_values: Optional[List[torch.Tensor]]
     pixel_attention_mask: Optional[List[torch.Tensor]]
     image_sizes: Optional[List[Tuple[int, int]]]
@@ -248,7 +249,130 @@ class VlmCausalLMBatch(FlashMistralBatch):
         return batch
 
 
-class VlmCausalLM(BaseFlashMistral):
+class VlmCausalLM(CausalLM):
+    def __init__(
+        self,
+        model_id: str,
+        revision: Optional[str] = None,
+        use_medusa: Optional[str] = None,
+        dtype: Optional[torch.dtype] = None,
+        trust_remote_code: bool = False,
+    ):
+        if use_medusa:
+            raise RuntimeError("Medusa decoding is not enabled for AutoModel")
+
+        # Create tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_id,
+            revision=revision,
+            padding_side="left",
+            truncation_side="left",
+            trust_remote_code=trust_remote_code,
+        )
+        make_tokenizer_optional(tokenizer)
+
+        # Create model
+        world_size = int(os.getenv("WORLD_SIZE", "1"))
+        rank = int(os.getenv("RANK", "0"))
+        dtype = torch.bfloat16 if dtype is None else dtype
+        device = torch.device("hpu")
+
+        if hq_env.is_quantization_enabled:
+            htorch.core.hpu_set_env()
+
+        if world_size > 1:
+            model = self.get_deepspeed_model(
+                model_id, dtype, revision
+            )
+            model = self.prepare_model_for_quantization(model)
+        else:
+            get_repo_root(model_id)
+
+            # Check support for rope scaling
+            model_kwargs = {}
+            config = AutoConfig.from_pretrained(
+                model_id
+            )
+            if hasattr(config, "rope_scaling"):
+                model_kwargs["rope_scaling"] = self.get_rope_scaling()
+
+            model = LlavaNextForConditionalGeneration.from_pretrained(
+                model_id,
+                revision=revision,
+                torch_dtype=dtype,
+                trust_remote_code=trust_remote_code,
+                **model_kwargs
+            )
+            model = self.prepare_model_for_quantization(model)
+            model = model.eval().to(device)
+
+        self.enable_hpu_graph = os.getenv("ENABLE_HPU_GRAPH", "true").lower() == "true"
+        self.limit_hpu_graph = os.getenv("LIMIT_HPU_GRAPH", "false").lower() == "true"
+        model = remove_kv_cache_from_output(model)
+        if self.enable_hpu_graph:
+            model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
+
+        model = self.setup_quantization(model)
+
+        if model.config.model_type not in MODELS_OPTIMIZED_WITH_STATIC_SHAPES:
+            raise ValueError(f"Model type {model.config.model_type} is not supported!")
+
+        if tokenizer.pad_token_id is None:
+            if model.config.pad_token_id is not None:
+                tokenizer.pad_token_id = model.config.pad_token_id
+            elif model.config.eos_token_id is not None:
+                tokenizer.pad_token_id = model.config.eos_token_id
+            elif tokenizer.eos_token_id is not None:
+                tokenizer.pad_token_id = tokenizer.eos_token_id
+            else:
+                tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+
+        kwargs = {
+            "use_cache": True,
+            "return_dict": True,
+        }
+
+        if model.config.model_type in ["llama", "mistral"]:
+            kwargs["attn_softmax_bf16"] = True
+            kwargs["trim_logits"] = True
+
+            if os.getenv("USE_FLASH_ATTENTION", "false").lower() == "true":
+                kwargs["use_flash_attention"] = True
+            if os.getenv("FLASH_ATTENTION_RECOMPUTE", "false").lower() == "true":
+                kwargs["flash_attention_recompute"] = True
+
+        self.speculate = get_speculate()
+
+        super(CausalLM, self).__init__(
+            model=model,
+            tokenizer=tokenizer,
+            requires_padding=True,
+            dtype=dtype,
+            device=device,
+            rank=rank,
+            kwargs=kwargs,
+        )
+
+        # Create profiler
+        ranks_to_profile = [int(val) for val in os.getenv("PROF_RANKS", "0").split(',')]
+        record_shapes = os.getenv("PROF_RECORD_SHAPES", "false").lower() == "true"
+        output_dir = os.getenv("PROF_PATH", "/tmp/hpu_profile")
+        self.profiling_warmup_steps = int(os.getenv("PROF_WARMUPSTEP", "0")) if rank in ranks_to_profile else 0
+        self.profiling_steps = int(os.getenv("PROF_STEP", "0")) if rank in ranks_to_profile else 0
+        self.profiling_wait_steps = int(os.getenv("PROF_WAITSTEP", "0"))
+        if self.profiling_steps > 0:
+            self.hb_profiler = HabanaProfile(
+                wait=self.profiling_wait_steps,
+                warmup=self.profiling_warmup_steps,
+                active=self.profiling_steps,
+                output_dir=output_dir,
+                record_shapes=record_shapes
+            )
+            self.hb_profiler.start()
+        else:
+            self.hb_profiler = None
+        self.step = 0
+
     @property
     def batch_type(self) -> Type[VlmCausalLMBatch]:
         return VlmCausalLMBatch
