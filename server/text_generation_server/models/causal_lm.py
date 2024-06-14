@@ -65,6 +65,7 @@ def torch_compile_for_eager(func):
         return func
     return torch.compile(func, backend="hpu_backend", options={"keep_input_mutations": True})
 
+
 def round_up(number, k):
     return (number + k - 1) // k * k
 
@@ -89,6 +90,7 @@ def biggest_single_chunk(offset):
         return int(math.copysign(CHUNK_SIZES[idx - 1], offset))
     else:
         return 0
+
 
 @torch_compile_for_eager
 def grouped_pad(tensor_groups, dims, values):
@@ -652,7 +654,7 @@ class CausalLM(Model):
             if LAZY_MODE == 0: 
                 # It is said that "keep_input_mutations" is safe for inference to be done
                 dbg_trace(
-                    "FWD", f'Torch compiling of model')
+                    "TORCH COMPILE", f'Torch compiling of model')
                 model.model = torch.compile(model.model, backend="hpu_backend", options={"keep_input_mutations": True})
 
         model = self.setup_quantization(model)
