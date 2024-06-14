@@ -28,7 +28,7 @@ class StarCoderCausalLMBatch(CausalLMBatch):
             torch.cat((key, value), dim=-1) for key, value in zip(past_keys, past_values)]
 
 
-class STARCODER(CausalLM):
+class StarCoder(CausalLM):
     def __init__(
         self,
         model_id: str,
@@ -40,7 +40,7 @@ class STARCODER(CausalLM):
         os.environ["ENABLE_HPU_GRAPH"] = "false"
         logger.warning("Disabling HPU graphs as they are not supported with Starcoder model!")
 
-        super(STARCODER, self).__init__(
+        super(StarCoder, self).__init__(
             model_id=model_id,
             revision=revision,
             dtype=dtype,
