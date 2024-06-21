@@ -32,7 +32,7 @@ COPY launcher launcher
 RUN cargo build --release
 
 # Text Generation Inference base image
-FROM vault.habana.ai/gaudi-docker/1.15.0/ubuntu22.04/habanalabs/pytorch-installer-2.2.0:latest as base
+FROM vault.habana.ai/gaudi-docker/1.16.1/ubuntu22.04/habanalabs/pytorch-installer-2.2.2:latest as base
 
 # Text Generation Inference base env
 ENV HUGGINGFACE_HUB_CACHE=/data \
