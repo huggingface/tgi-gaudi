@@ -650,7 +650,7 @@ class CausalLM(Model):
             model = self.prepare_model_for_quantization(model)
             model = model.eval().to(device)
 
-        self.enable_hpu_graph = os.getenv("ENABLE_HPU_GRAPH", "true").lower() == "true"
+        self.enable_hpu_graph = os.getenv("ENABLE_HPU_GRAPH", "true").lower() == "true" and LAZY_MODE == 1
         self.limit_hpu_graph = os.getenv("LIMIT_HPU_GRAPH", "false").lower() == "true"
         model = remove_kv_cache_from_output(model)
         if self.enable_hpu_graph:
