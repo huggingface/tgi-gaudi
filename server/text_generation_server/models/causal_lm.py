@@ -835,6 +835,28 @@ class CausalLM(Model):
         else:
             return super().decode_token(all_input_ids, prefix_offset, read_offset)
 
+    def perplexity(
+        self,
+        output
+    ):
+        import torch
+        loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
+        ppls=[]
+        labels = output["input_ids"]
+        attn_mask = output["attention_mask"]
+        out_logits = output.logits
+        shift_logits = out_logits[..., :-1, :].contiguous()
+        shift_labels = labels[..., 1:].contiguous()
+        shift_attention_mask_batch = attn_mask[..., 1:].contiguous()
+
+        perplexity_batch = torch.exp(
+            (loss_fct(shift_logits.transpose(1, 2), shift_labels) * shift_attention_mask_batch).sum(1)
+            / shift_attention_mask_batch.sum(1)
+        )
+
+        ppls += perplexity_batch.tolist()
+        return {"perplexities": ppls, "mean_perplexity": np.mean(ppls)}
+        
     def forward(
         self,
         input_ids,
@@ -867,7 +889,8 @@ class CausalLM(Model):
 
     @tracer.start_as_current_span("generate_token")
     def generate_token(
-        self, batches: List[CausalLMBatch]
+        self, batches: List[CausalLMBatch],
+        compute_perplexity: Optional[bool] = False
     ) -> Tuple[List[Generation], Optional[CausalLMBatch], Tuple[int, int]]:
         start = time.time_ns()
         # Results
@@ -988,6 +1011,10 @@ class CausalLM(Model):
                 batch.past_key_values,
                 bypass_hpu_graph=prefill and self.limit_hpu_graph if self.enable_hpu_graph else None,
             )
+        if compute_perplexity:
+            ppls = self.perplexity(output)
+            print(f'Perplexity: {ppls["mean_perplexity"]}')
+            print(f'Mean perplexity: {round(ppls["mean_perplexity"], 2)}')
 
         htorch.core.mark_step()
 
@@ -1154,17 +1181,17 @@ class CausalLM(Model):
             ]
 
         # prefill
-        _, prefill_batch, _ = self.generate_token([batches.pop(0)])
+        _, prefill_batch, _ = self.generate_token([batches.pop(0)], true)
         # decode
-        _, decode_batch, _ = self.generate_token([prefill_batch])
+        _, decode_batch, _ = self.generate_token([prefill_batch], true)
         # shifts
         self.shifting_warmup(decode_batch)
 
         while len(batches) > 0:
             # prefill
-            _, prefill_batch, _ = self.generate_token([batches.pop(0)])
+            _, prefill_batch, _ = self.generate_token([batches.pop(0)], true)
             # concatenate and decode
-            _, decode_batch, _ = self.generate_token([decode_batch, prefill_batch])
+            _, decode_batch, _ = self.generate_token([decode_batch, prefill_batch], true)
             # filter finished requests
             request_ids = get_unfinished_requests(decode_batch.requests)
             if len(request_ids) < len(decode_batch.requests):
@@ -1176,7 +1203,7 @@ class CausalLM(Model):
             if len(request_ids) < len(decode_batch.requests):
                 decode_batch = decode_batch.filter(request_ids)
             # decode
-            _, decode_batch, _ = self.generate_token([decode_batch])
+            _, decode_batch, _ = self.generate_token([decode_batch], true)
 
     def shifting_warmup(self, batch: CausalLMBatch) -> None:
         chunk_sizes = CHUNK_SIZES.copy()
