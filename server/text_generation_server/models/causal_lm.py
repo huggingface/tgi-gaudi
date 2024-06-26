@@ -839,7 +839,6 @@ class CausalLM(Model):
         self,
         output
     ):
-        import torch
         loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
         ppls=[]
         labels = output["input_ids"]
