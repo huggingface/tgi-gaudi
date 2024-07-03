@@ -962,7 +962,7 @@ class CausalLM(Model):
             batch = batch.__class__.recombine([batch], self.tokenizer.pad_token_id)
 
         scenario = 'PREFILL' if prefill else 'GENERATE'
-        if batch.batch_size != self.prev_bs:
+        if self.enable_hpu_graph and batch.batch_size != self.prev_bs:
             self.model.clear_cache()
             self.prev_bs = batch.batch_size
         dbg_trace(
