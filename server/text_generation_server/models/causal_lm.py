@@ -852,7 +852,7 @@ class CausalLM(Model):
             "token_idx": token_idx,
         }
 
-        # Optimum Habana got lazy_mode only supported for llama type of models
+        # Optimum Habana got "lazy_mode" key-val only supported for llama type of models
         if self.model.config.model_type == "llama" :
             kwargs["lazy_mode"] = LAZY_MODE == 1
 
