@@ -137,8 +137,8 @@ impl Client {
         let seq_bucket_size: u32 = read_env_var("PAD_SEQUENCE_TO_MULTIPLE_OF", 128);
         let mut seq_lengths: Vec<u32> = (seq_bucket_size..max_input_length+1).step_by(seq_bucket_size as usize).collect();
         if let Some(&last) = seq_lengths.last() {
-            if last < max_input_length {
-                seq_lengths.push(max_input_length);
+            if last < (max_input_length + 1) {
+                seq_lengths.push(max_input_length + 1);
             }
         }
 
@@ -150,17 +150,20 @@ impl Client {
             }
         }
 
-        let mut id_counter: u64 = 0;
+        let mut batch_counter: u64 = 0;
+        let mut request_counter: u64 = 0;
         for shape in shapes.iter() {
             let (batch_size, seq_length) = shape;
             let mut batches: Vec<Batch> = vec![
                 self.create_warmup_batch(
                     *shape,
-                    &mut id_counter,
+                    &mut batch_counter,
+                    &mut request_counter,
                     max_input_length,
                     max_total_tokens,
                     seq_bucket_size,
                     false,
+                    None,
                 )
             ];
             // if possible, create second batch in order to trigger concatenate operation
@@ -168,11 +171,13 @@ impl Client {
                 batches.push(
                     self.create_warmup_batch(
                         (1, *seq_length),
-                        &mut id_counter,
+                        &mut batch_counter,
+                        &mut request_counter,
                         max_input_length,
                         max_total_tokens,
                         seq_bucket_size,
                         false,
+                        None,
                     )
                 );
             }
@@ -188,15 +193,24 @@ impl Client {
 
         // send batches to warmup all possible decode shapes
         if decode_batch_sizes.len() > 1 {
+            let steps_per_bucket: u32 = if decode_bucket_size <= max_prefill_batch_size {
+                decode_bucket_size
+            } else {
+                decode_bucket_size.div_ceil(max_prefill_batch_size)
+            };
+            let max_new_tokens: u32 = 2 * decode_batch_sizes.len() as u32 * steps_per_bucket;
+
             let mut requests_send: u32 = cmp::min(max_prefill_batch_size, decode_bucket_size);
             let mut batches: Vec<Batch> = vec![
                 self.create_warmup_batch(
                     (requests_send, seq_bucket_size),
-                    &mut id_counter,
+                    &mut batch_counter,
+                    &mut request_counter,
                     max_input_length,
                     max_total_tokens,
                     seq_bucket_size,
                     false,
+                    Some(max_new_tokens),
                 )
             ];
 
@@ -215,11 +229,13 @@ impl Client {
                 batches.push(
                     self.create_warmup_batch(
                         (num_requests, seq_bucket_size),
-                        &mut id_counter,
+                        &mut batch_counter,
+                        &mut request_counter,
                         max_input_length,
                         max_total_tokens,
                         seq_bucket_size,
                         false,
+                        Some(max_new_tokens),
                     )
                 );
 
@@ -245,11 +261,13 @@ impl Client {
             let batches: Vec<Batch> = vec![
                 self.create_warmup_batch(
                     *greedy_shape,
-                    &mut id_counter,
+                    &mut batch_counter,
+                    &mut request_counter,
                     max_input_length,
                     max_total_tokens,
                     seq_bucket_size,
                     true,
+                    None,
                 )
             ];
             let request = tonic::Request::new(WarmupRequest {
@@ -267,16 +285,19 @@ impl Client {
     fn create_warmup_batch(
         &mut self,
         shape: (u32, u32),
-        id_counter: &mut u64,
+        batch_counter: &mut u64,
+        request_counter: &mut u64,
         max_input_length: u32,
         max_total_tokens: u32,
         seq_bucket_size: u32,
         default_params: bool,
+        max_new_tokens: Option<u32>,
     ) -> Batch {
-        *id_counter += 1;
+        *batch_counter += 1;
         let (batch_size, input_length) = shape;
         let mut requests = Vec::new();
-        for request_id in 0..batch_size {
+        for _ in 0..batch_size {
+            *request_counter += 1;
             let req_params = if default_params {
                 Some(NextTokenChooserParameters {
                     temperature: 1.0,
@@ -307,12 +328,12 @@ impl Client {
                 })
             };
             requests.push(Request {
-                id: *id_counter + request_id as u64,
+                id: *request_counter,
                 inputs: self.get_random_input(input_length, seq_bucket_size),
                 truncate: max_input_length,
                 parameters: req_params,
                 stopping_parameters: Some(StoppingCriteriaParameters {
-                    max_new_tokens: cmp::min(10, max_total_tokens - max_input_length),
+                    max_new_tokens: cmp::min(max_new_tokens.unwrap_or(10), max_total_tokens - max_input_length),
                     stop_sequences: vec![],
                     ignore_eos_token: true,
                 }),
@@ -322,7 +343,7 @@ impl Client {
         }
 
         Batch {
-            id: *id_counter,
+            id: *batch_counter,
             size: requests.len() as u32,
             requests,
             max_tokens: max_total_tokens,

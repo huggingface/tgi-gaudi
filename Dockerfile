@@ -20,6 +20,7 @@ RUN PROTOC_ZIP=protoc-21.12-linux-x86_64.zip && \
     rm -f $PROTOC_ZIP
 
 COPY --from=planner /usr/src/recipe.json recipe.json
+COPY Cargo.lock Cargo.lock
 RUN cargo chef cook --release --recipe-path recipe.json
 
 COPY Cargo.toml Cargo.toml
@@ -31,7 +32,7 @@ COPY launcher launcher
 RUN cargo build --release
 
 # Text Generation Inference base image
-FROM vault.habana.ai/gaudi-docker/1.15.0/ubuntu22.04/habanalabs/pytorch-installer-2.2.0:latest as base
+FROM vault.habana.ai/gaudi-docker/1.16.0/ubuntu22.04/habanalabs/pytorch-installer-2.2.2:latest as base
 
 # Text Generation Inference base env
 ENV HUGGINGFACE_HUB_CACHE=/data \
@@ -59,7 +60,7 @@ RUN cd server && \
     make gen-server && \
     pip install -r requirements.txt && \
     bash ./dill-0.3.8-patch.sh && \
-    pip install git+https://github.com/HabanaAI/DeepSpeed.git@1.15.0 && \
+    pip install git+https://github.com/HabanaAI/DeepSpeed.git@1.16.0 && \
     pip install . --no-cache-dir
 
 # Install benchmarker
