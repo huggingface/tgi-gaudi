@@ -602,6 +602,7 @@ class CausalLM(Model):
         dtype: Optional[torch.dtype] = None,
         trust_remote_code: bool = False,
     ):
+        self.prev_bs = 0
         if use_medusa:
             raise RuntimeError("Medusa decoding is not enabled for AutoModel")
 
@@ -650,7 +651,7 @@ class CausalLM(Model):
             model = self.prepare_model_for_quantization(model)
             model = model.eval().to(device)
 
-        self.enable_hpu_graph = os.getenv("ENABLE_HPU_GRAPH", "true").lower() == "true"
+        self.enable_hpu_graph = os.getenv("ENABLE_HPU_GRAPH", "true").lower() == "true" and LAZY_MODE == 1
         self.limit_hpu_graph = os.getenv("LIMIT_HPU_GRAPH", "false").lower() == "true"
         model = remove_kv_cache_from_output(model)
         if self.enable_hpu_graph:
@@ -873,6 +874,10 @@ class CausalLM(Model):
             "token_idx": token_idx,
         }
 
+        # Optimum Habana got "lazy_mode" key-val only supported for llama type of models
+        if self.model.config.model_type == "llama" :
+            kwargs["lazy_mode"] = LAZY_MODE == 1
+
         if self.has_position_ids:
             kwargs["position_ids"] = position_ids
 
@@ -983,6 +988,9 @@ class CausalLM(Model):
             batch = batch.__class__.recombine([batch], self.tokenizer.pad_token_id)
 
         scenario = 'PREFILL' if prefill else 'GENERATE'
+        if self.enable_hpu_graph and self.limit_hpu_graph and round_up(batch.batch_size, BATCH_BUCKET_SIZE) != self.prev_bs:
+            self.model.clear_cache()
+            self.prev_bs = round_up(batch.batch_size, BATCH_BUCKET_SIZE)
         dbg_trace(
             scenario, f'bs:{batch.batch_size} num_reqs:{len(batch.requests)} seq_len:{batch.seq_length} padding:{batch.right_padding}')
         assert batch.right_padding > 0, 'No more room for next token!'
@@ -999,6 +1007,10 @@ class CausalLM(Model):
                 batch.past_key_values,
                 bypass_hpu_graph=prefill and self.limit_hpu_graph if self.enable_hpu_graph else None,
             )
+        elif all([req.stopping_criteria.max_new_tokens == 1 for req in batch.requests]):
+            # Don't schedule next forward if max_new_tokens for all requests equals 1 
+            # - we've already generated the first and only needed token in the prefill phase
+            pass
         else:
             token_idx = torch.tensor(batch.attention_mask.shape[-1] - batch.right_padding).to(self.device)
             input_ids = torch.index_select(batch.input_ids, 1, token_idx - 1)
