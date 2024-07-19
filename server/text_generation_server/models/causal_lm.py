@@ -33,7 +33,6 @@ from transformers import (
 
 from text_generation_server.utils.tokens import batch_top_tokens
 from text_generation_server.models import Model
-from text_generation_server.utils.tokens import batch_top_tokens
 from text_generation_server.models.types import (
     Batch,
     Tokens,
@@ -658,7 +657,7 @@ class CausalLM(Model):
             from habana_frameworks.torch.hpu import wrap_in_hpu_graph
             model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
         else:
-            if LAZY_MODE == 0: 
+            if LAZY_MODE == 0:
                 # It is said that "keep_input_mutations" is safe for inference to be done
                 dbg_trace(
                     "TORCH COMPILE", f'Torch compiling of model')

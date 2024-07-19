@@ -17,6 +17,7 @@ from typing import List, Optional
 from text_generation_server.cache import Cache
 from text_generation_server.interceptor import ExceptionInterceptor
 from text_generation_server.models import Model, get_model
+from text_generation_server.models.vlm_causal_lm import VlmCausalLMBatch
 from text_generation_server.pb import generate_pb2_grpc, generate_pb2
 from text_generation_server.tracing import UDSOpenTelemetryAioServerInterceptor
 
@@ -82,9 +83,19 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
 
     async def Warmup(self, request, context):
         def batch_from_pb(batch):
-            return self.model.batch_type.from_pb(
-                batch, self.model.tokenizer, self.model.dtype, self.model.device
-            )
+            if self.model.batch_type == VlmCausalLMBatch:
+                return self.model.batch_type.from_pb_processor(
+                    batch,
+                    self.model.tokenizer,
+                    self.model.processor,
+                    self.model.model.config,
+                    self.model.dtype,
+                    self.model.device,
+                )
+            else:
+                return self.model.batch_type.from_pb(
+                    batch, self.model.tokenizer, self.model.dtype, self.model.device
+                )
 
         batches = [batch_from_pb(batch) for batch in request.batches]
         self.model.warmup(batches)
@@ -93,9 +104,20 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
 
     async def Prefill(self, request, context):
         start = time.time_ns()
-        batch = self.model.batch_type.from_pb(
-            request.batch, self.model.tokenizer, self.model.dtype, self.model.device
-        )
+        if self.model.batch_type == VlmCausalLMBatch:  # Hack, i would rather use kwargs in the `from_pb` call
+            batch = self.model.batch_type.from_pb_processor(
+                request.batch,
+                self.model.tokenizer,
+                self.model.processor,
+                self.model.model.config,
+                self.model.dtype,
+                self.model.device,
+            )
+        else:
+            batch = self.model.batch_type.from_pb(
+                request.batch, self.model.tokenizer, self.model.dtype, self.model.device
+            )
+
         generations, next_batch, timings = self.model.generate_token([batch])
         self.cache.set(next_batch)
 
