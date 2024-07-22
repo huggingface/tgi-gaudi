@@ -15,6 +15,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::collections::BTreeMap;
 use text_generation_client::{ClientError, ShardedClient};
 use text_generation_router::config::Config;
 use text_generation_router::{server, HubModelInfo, HubTokenizerConfig};
@@ -343,43 +344,79 @@ async fn main() -> Result<(), RouterError> {
 
     // Warmup model
     tracing::info!("Warming up model");
-    let max_supported_batch_total_tokens = match sharded_client
-        .warmup(
-            max_input_tokens as u32,
-            max_batch_prefill_tokens,
-            max_total_tokens as u32,
-            max_batch_size,
-            &model_info.model_id
-        )
-        .await
-        .map_err(RouterError::Warmup)?
-    {
-        // Older models do not support automatic max-batch-total-tokens
-        None => {
-            let max_batch_total_tokens = max_batch_total_tokens
-                .unwrap_or(16000.max((max_total_tokens as u32).max(max_batch_prefill_tokens)));
-            tracing::warn!("Model does not support automatic max batch total tokens");
-            max_batch_total_tokens
-        }
-        // Flash attention models return their max supported total tokens
-        Some(max_supported_batch_total_tokens) => {
-            // Warn if user added his own max-batch-total-tokens as we will ignore it
-            if max_batch_total_tokens.is_some() {
-                tracing::warn!(
-                    "`--max-batch-total-tokens` is deprecated for Flash \
-                        Attention models."
-                );
-                tracing::warn!(
-                    "Inferred max batch total tokens: {max_supported_batch_total_tokens}"
-                );
-            }
-            if max_total_tokens as u32 > max_supported_batch_total_tokens {
-                return Err(RouterError::ArgumentValidation(format!("`max_total_tokens` must be <= `max_batch_total_tokens`. Given: {max_total_tokens} and {max_supported_batch_total_tokens}")));
-            }
+    let max_total_tokens_2_bs_pair_str = std::env::var("MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST".to_string()).unwrap_or("".to_string()).to_string();
+    let mut tokens_2_bs: BTreeMap<u32, u32> = BTreeMap::new();
 
-            max_supported_batch_total_tokens
+    if !max_total_tokens_2_bs_pair_str.trim().is_empty() {
+        tokens_2_bs = max_total_tokens_2_bs_pair_str.split(',').map(|s| s.split_at(s.find(":").unwrap()))
+        .map(|(key, val)| (key.parse::<u32>().unwrap(), val[1..].parse::<u32>().unwrap())).collect();
+        let (mtt, mbs) = tokens_2_bs.iter().next_back().unwrap();
+        if *mtt != (max_total_tokens as u32) {
+            return Err(RouterError::ArgumentValidation(format!("`max_total_tokens` and `max_batch_size` must the same as last item in the 'MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST'. Given: {max_total_tokens}, ... and {max_total_tokens_2_bs_pair_str}")));
         }
-    };
+
+        if let Some(max_batch_size) = max_batch_size {
+            if *mbs != (max_batch_size as u32) {
+                return Err(RouterError::ArgumentValidation(format!("`max_total_tokens` and `max_batch_size` must the same as last item in the 'MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST'. Given: {max_total_tokens}, {max_batch_size} and {max_total_tokens_2_bs_pair_str}")));
+            }
+        }
+
+    } else {
+        // The 32 will be replaced by max_batch_size in the later
+        tokens_2_bs.insert(max_total_tokens as u32, 32);
+    }
+
+    let mut max_total_tokens_vec: Vec<u32> = Vec::new();
+    for (k, v) in tokens_2_bs{
+        let mtt = k;
+        let mut mit = mtt - 1;
+        let mut mbs: Option<usize> = Some(v as usize);
+        if max_total_tokens_2_bs_pair_str.trim().is_empty() {
+            mit = max_input_tokens as u32;
+            mbs = max_batch_size;
+        }
+
+        let max_supported_batch_total_tokens = match sharded_client
+            .warmup(
+                mit,
+                max_batch_prefill_tokens,
+                mtt as u32,
+                mbs,
+                &model_info.model_id
+            )
+            .await
+            .map_err(RouterError::Warmup)?
+        {
+            // Older models do not support automatic max-batch-total-tokens
+            None => {
+                let max_batch_total_tokens = max_batch_total_tokens
+                    .unwrap_or(16000.max((max_total_tokens as u32).max(max_batch_prefill_tokens)));
+                tracing::warn!("Model does not support automatic max batch total tokens");
+                max_batch_total_tokens
+            }
+            // Flash attention models return their max supported total tokens
+            Some(max_supported_batch_total_tokens) => {
+                // Warn if user added his own max-batch-total-tokens as we will ignore it
+                if max_batch_total_tokens.is_some() {
+                    tracing::warn!(
+                        "`--max-batch-total-tokens` is deprecated for Flash \
+                            Attention models."
+                    );
+                    tracing::warn!(
+                        "Inferred max batch total tokens: {max_supported_batch_total_tokens}"
+                    );
+                }
+                if max_total_tokens as u32 > max_supported_batch_total_tokens {
+                    return Err(RouterError::ArgumentValidation(format!("`max_total_tokens` must be <= `max_batch_total_tokens`. Given: {max_total_tokens} and {max_supported_batch_total_tokens}")));
+                }
+
+                max_supported_batch_total_tokens
+            }
+        };
+        max_total_tokens_vec.push(max_supported_batch_total_tokens);
+    }
+
+    let max_supported_batch_total_tokens = *max_total_tokens_vec.iter().max().unwrap();
     tracing::info!("Setting max batch total tokens to {max_supported_batch_total_tokens}");
     tracing::info!("Connected");
 

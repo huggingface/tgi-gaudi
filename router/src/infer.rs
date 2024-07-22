@@ -12,6 +12,7 @@ use minijinja::{Environment, ErrorKind, Template};
 use nohash_hasher::IntMap;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -143,11 +144,26 @@ impl Infer {
             })?;
 
         // Validate request
-        let valid_request = self.validation.validate(request).await.map_err(|err| {
+        let mut v_request = self.validation.validate(request).await.map_err(|err| {
             metrics::increment_counter!("tgi_request_failure", "err" => "validation");
             tracing::error!("{err}");
             err
         })?;
+
+        let read_env_var = |key: &str, default: u32| -> u32 {
+            std::env::var(key).ok().map_or(default, |value| value.parse::<u32>().unwrap())
+        };
+        let pad: u32 = read_env_var("PAD_SEQUENCE_TO_MULTIPLE_OF", 128);
+        fn norm_truncate(truncate: u32, p: u32) -> u32{
+            let mut upper = p;
+            while truncate > upper {
+                upper = upper * 2;
+            }
+            return upper;
+        }
+
+        v_request.truncate = norm_truncate(v_request.input_length, pad);
+        let valid_request = v_request;
 
         // MPSC channel to communicate with the background batching task
         let (response_tx, response_rx) = mpsc::unbounded_channel();
@@ -529,6 +545,18 @@ async fn batching_task(
     shared: Arc<Shared>,
     generation_health: Arc<AtomicBool>,
 ) {
+
+    let read_env_var = |key: &str, default: u32| -> u32 {
+        std::env::var(key).ok().map_or(default, |value| value.parse::<u32>().unwrap())
+    };
+    let prefill_bucket_size: u32 = read_env_var("PREFILL_BATCH_BUCKET_SIZE", 4);
+    let max_input_tokens: u32 = read_env_var("MAX_INPUT_TOKENS", 1024);
+    let use_adaptive_batching = !std::env::var("MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST".to_string()).unwrap_or("".to_string()).to_string().trim().is_empty();
+    let max_total_tokens_2_bs_pair_str = std::env::var("MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST".to_string()).unwrap_or("2048:48,4096:24,8192:12".to_string()).to_string();
+
+    let tokens_2_bs = max_total_tokens_2_bs_pair_str.split(',').map(|s| s.split_at(s.find(":").unwrap()))
+        .map(|(key, val)| (key.parse::<u32>().unwrap(), val[1..].parse::<u32>().unwrap())).collect();
+
     // Infinite loop
     loop {
         // Wait for a notification from the Infer struct
@@ -557,6 +585,7 @@ async fn batching_task(
                 // Get current batch info
                 let batch_size = batch.size;
                 let batch_max_tokens = batch.max_tokens;
+                let max_total_tokens = batch.batch_max_tokens;
                 let mut batches = vec![batch];
                 metrics::gauge!("tgi_batch_current_size", batch_size as f64);
                 metrics::gauge!("tgi_batch_current_max_tokens", batch_max_tokens as f64);
@@ -570,14 +599,94 @@ async fn batching_task(
                     Some((batch_size as f32 * waiting_served_ratio).floor() as usize)
                 };
 
+                fn max_tokens_2_max_bs(map: &BTreeMap<u32, u32>, max_t: u32) -> u32 {
+                    for (k, v) in map{
+                        if max_t <= *k {
+                            return *v;
+                        }
+                    }
+                    let (_, value) = map.iter().next_back().unwrap();
+                    return *value
+                }
+
+                fn max_tokens_round_up(map: &BTreeMap<u32, u32>, max_t: u32) -> u32 {
+                    for (k, _) in map{
+                        if max_t <= *k {
+                            return *k;
+                        }
+                    }
+                    let (key, _) = map.iter().next_back().unwrap();
+                    return *key
+                }
+
+                let max_bs = max_tokens_2_max_bs(&tokens_2_bs, max_total_tokens);
+                let diff_size = max_bs - batch_size;
+
+                let max_by_prefill: u32 = max_batch_prefill_tokens / max_input_tokens;
+                let max_by_bucket: u32 = (diff_size / prefill_bucket_size) * prefill_bucket_size;
+                let v = vec![max_by_prefill, max_by_bucket];
+                let min_value = *v.iter().min().unwrap();
+
                 let token_budget = max_batch_total_tokens.saturating_sub(batch_max_tokens);
-                let max_size = max_batch_size.map(|max_size| max_size - batch_size as usize);
+                let mut max_size = max_batch_size.map(|max_size| max_size - batch_size as usize);
+                if use_adaptive_batching {
+                    max_size = Some(min_value as usize);
+                }
 
                 // Try to get a new batch
                 if let Some((mut new_entries, new_batch, span)) = queue
                     .next_batch(min_size, max_size, max_batch_prefill_tokens, token_budget)
                     .await
                 {
+
+                    // Algorithms:
+                    //
+                    // Step 1. Compare new-batch max total tokens with cur-batch max total tokens. If <= Step 2 else Step 3
+                    // Step 2. Compare new bs requests size with cur accommodable requests. If <= then add the new batch else just decode
+                    //          until <= (we need parameter check here to avoid endless loop)
+                    // Step 3. Compute the new-batch's accommodable requests with cur requests size.
+                    //         If >= add the new batch else decode until >=
+
+                    if use_adaptive_batching {
+                        let new_bs_requests_size = new_batch.requests.len();
+                        let new_bs_size: u32 = ((new_bs_requests_size as u32) + prefill_bucket_size - 1) / prefill_bucket_size * prefill_bucket_size;
+                        let mut new_batch_max_tokens = 0;
+                        //TODO: if stopping_parameters can not provide the max tokens we should use new_bs other field to calculate.
+                        for res in &new_batch.requests {
+                            if let Some(sp) = &res.stopping_parameters{
+                                if res.truncate + sp.max_new_tokens > new_batch_max_tokens {
+                                    new_batch_max_tokens = res.truncate + sp.max_new_tokens;
+                                }
+                            }
+                        }
+                        let new_batch_accommodable_requests_size = max_tokens_2_max_bs(&tokens_2_bs, new_batch_max_tokens);
+
+                        let mut cur_max_total_tokens = max_total_tokens;
+                        let mut cur_batch_requests_size = batch_size;
+
+                        loop {
+                            let cur_batch_accommodable_requests_size = max_tokens_2_max_bs(&tokens_2_bs, cur_max_total_tokens);
+
+                            if (max_tokens_round_up(&tokens_2_bs, new_batch_max_tokens) <= max_tokens_round_up(&tokens_2_bs, cur_max_total_tokens)
+                                                    && new_bs_size + cur_batch_requests_size <= cur_batch_accommodable_requests_size) ||
+                                (max_tokens_round_up(&tokens_2_bs, new_batch_max_tokens) >= max_tokens_round_up(&tokens_2_bs, cur_max_total_tokens)
+                                                    && new_batch_accommodable_requests_size >= cur_batch_requests_size + new_bs_size) {
+                                break;
+                            }
+
+                            let next_batch_span = info_span!(parent: None, "batch", batch_size = cur_batch_requests_size);
+                            let cur_batch = decode(&mut client, batches.clone(), &mut entries, &generation_health)
+                            .instrument(next_batch_span)
+                            .await;
+                            waiting_tokens += 1;
+
+                            if let Some(cur_b) = cur_batch {
+                                cur_batch_requests_size = cur_b.size;
+                                cur_max_total_tokens = cur_b.batch_max_tokens;
+                            }
+                        }
+                    }
+
                     // Tracking metrics
                     if min_size.is_some() {
                         metrics::increment_counter!("tgi_batch_concat", "reason" => "backpressure");

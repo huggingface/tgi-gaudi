@@ -128,13 +128,15 @@ impl Validation {
         // If we have a fast tokenizer
         if let Some((encoding, inputs)) = self.tokenize(inputs.clone(), truncate).await? {
             // Create response channel
+            let len = if let Some(truncate) = truncate {
+                std::cmp::min(encoding.len(), truncate)
+            } else {
+                encoding.len()
+            };
             let input_length = if self.skip_tokenizer_in_tgi {
                 inputs.chars().filter(|&c| c == ',').count() + 1
             } else {
-                cmp::max(
-                    encoding.len(),
-                    truncate.unwrap_or(self.max_input_length)
-                )
+                len
             };
 
             // Get total tokens

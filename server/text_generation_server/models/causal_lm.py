@@ -59,6 +59,30 @@ PREFILL_BATCH_BUCKET_SIZE = int(os.environ.get('PREFILL_BATCH_BUCKET_SIZE', 4))
 CHUNK_SIZES = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
 LAZY_MODE = int(os.environ.get('PT_HPU_LAZY_MODE', 1))
 
+#TOKENS_2_BS = os.environ.get('MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST', '2048:48,4096:24,8192:12')
+TOKENS_2_BS = os.environ.get('MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST', '')
+
+TOKENS_2_BS_MAP = []
+
+for sub in TOKENS_2_BS.split(','):
+    if ':' in sub:
+        TOKENS_2_BS_MAP.append(map(int, sub.split(':', 1)))
+TOKENS_2_BS_MAP = dict(TOKENS_2_BS_MAP)
+
+def use_adaptive_batching():
+    return bool(TOKENS_2_BS_MAP)
+
+def upper_total_tokens(number):
+    use_adaptive = use_adaptive_batching()
+    if not use_adaptive:
+        return MAX_TOTAL_TOKENS
+
+    tokens = TOKENS_2_BS_MAP.keys()
+    for token in tokens:
+        if token >= number:
+            return token
+
+    return tokens[-1]
 
 def torch_compile_for_eager(func):
     if LAZY_MODE == 1:
@@ -93,10 +117,10 @@ def biggest_single_chunk(offset):
 
 
 @torch_compile_for_eager
-def grouped_pad(tensor_groups, dims, values):
+def grouped_pad(tensor_groups, dims, values, max_total_tokens):
     grouped_result = []
     for tensors, dim, value in zip(tensor_groups, dims, values):
-        padding = MAX_TOTAL_TOKENS - tensors[0].size(dim) if dim is not None else 0
+        padding = upper_total_tokens(max_total_tokens) - tensors[0].size(dim) if dim is not None else 0
         if padding > 0:
             assert dim in [-1, -2], f'Only dims -1 and -2 are supported! {dim}'
             pad_shape = (0, 0, 0, padding) if dim == -2 else (0, padding)
@@ -161,6 +185,7 @@ def extend_batch(tensors, target_bs, dim):
     # TODO: add support for shrinking bs
     if diff <= 0:
         return tensors
+
     shape = list(tensors[0].shape)
     shape[dim] = diff
     padding = torch.empty(shape, device=tensors[0].device, dtype=tensors[0].dtype)
@@ -268,6 +293,7 @@ class CausalLMBatch(Batch):
             request_ids=[r.data.id for r in self.requests],
             size=len(self),
             max_tokens=self.max_tokens,
+            batch_max_tokens=upper_total_tokens(self.max_total_tokens)
         )
 
     def detach_kv_cache(self):
@@ -281,7 +307,7 @@ class CausalLMBatch(Batch):
         self.past_key_values = list(zip(past_keys, past_values))
 
     def merge_kv_cache_if_needed(self, target_bs, offset):
-        pad_needed = self.seq_length < MAX_TOTAL_TOKENS
+        pad_needed = self.seq_length < upper_total_tokens(self.max_total_tokens)
         shift_needed = offset != 0
         expand_needed = target_bs > self.batch_size
         # Very simple heuristic to determine whether we should merge tensors
@@ -323,7 +349,7 @@ class CausalLMBatch(Batch):
 
     def realign(self, target_bs, offset, pad_token_id):
         tensors, seq_dims, _ = self.get_tensor_groups()
-        tensors = grouped_pad(tensors, seq_dims, [pad_token_id, 0, 0, 0, 0])
+        tensors = grouped_pad(tensors, seq_dims, [pad_token_id, 0, 0, 0, 0], self.max_total_tokens)
         tensors = grouped_shift(tensors, seq_dims, offset, self.merged_kv_cache)
         self.set_tensor_groups(tensors)
 
@@ -353,6 +379,15 @@ class CausalLMBatch(Batch):
             grouped_move(dst_tensors, dst_indices, src_tensors)
         self.set_tensor_groups(dst_tensors)
 
+    @property
+    def max_total_tokens(self):
+        max_total = max((r.data.truncate + r.stopping_criteria.max_new_tokens) for r in self.requests)
+        return max_total
+
+    @property
+    def requests_length(self):
+        return len(self)
+
     @classmethod
     def recombine(cls, batches: List["CausalLMBatch"], pad_token_id: int) -> "CausalLMBatch":
         if not all(b.past_key_values is not None for b in batches):
@@ -368,11 +403,46 @@ class CausalLMBatch(Batch):
         offsets = [max_input_length - b.input_length for b in batches]
 
         cur_padding = [b.right_padding for b in batches]
+
+        use_adaptive = use_adaptive_batching()
+        if use_adaptive:
+            total_tokens = max(b.max_total_tokens for b in batches)
+            new_bs = list(TOKENS_2_BS_MAP.values())[-1]
+            for token, bs in TOKENS_2_BS_MAP.items():
+                if total_tokens <= token:
+                    new_bs = bs
+                    break
+
+            assert total_requests <= new_bs , 'total_requests should less or equal new_bs'
+
         # For prefill there is a space allocated only for first token
         # Need to add padding to the max total tokens before first decode
 
         moves_needed = [total_requests - len(b) if b.batch_size == new_bs else total_requests for b in batches]
+
         dst_batch_idx = min(enumerate(moves_needed), key=lambda idx_val: idx_val[1])[0]
+        if use_adaptive:
+            cur_max_batch_size = max(b.batch_size for b in batches)
+            sl = 0
+            # In this case the actually batch size will shrink and tensor will expand
+            if new_bs < cur_max_batch_size:
+                for idx, b in enumerate(batches):
+                    if b.max_total_tokens > sl:
+                        dst_batch_idx = idx
+                        sl = b.max_total_tokens
+            # In this case the actually batch size will expand and tensor will shrink
+            elif new_bs > cur_max_batch_size:
+                dst_batch_idx = 0
+                sl = batches[0].seq_length
+                for idx, b in enumerate(batches):
+                    if b.seq_length < sl:
+                        dst_batch_idx = idx
+                        sl = b.seq_length
+
+                if max_input_length >= batches[dst_batch_idx].seq_length:
+                    max_input_length = batches[dst_batch_idx].seq_length
+                    offsets = [max_input_length - b.input_length for b in batches]
+
         reshape = (batches[dst_batch_idx].batch_size < new_bs)
 
         # TODO: Add support for changing max seq len, i.e. due to output length bucketing
@@ -1172,13 +1242,20 @@ class CausalLM(Model):
         # decode
         _, decode_batch, _ = self.generate_token([prefill_batch])
         # shifts
-        self.shifting_warmup(decode_batch)
+        if decode_batch is not None:
+            self.shifting_warmup(decode_batch)
 
         while len(batches) > 0:
             # prefill
             _, prefill_batch, _ = self.generate_token([batches.pop(0)])
             # concatenate and decode
-            _, decode_batch, _ = self.generate_token([decode_batch, prefill_batch])
+            if decode_batch is not None:
+                _, decode_batch, _ = self.generate_token([decode_batch, prefill_batch])
+            else:
+                _, decode_batch, _ = self.generate_token([prefill_batch])
+
+            if decode_batch is None:
+                break
             # filter finished requests
             request_ids = get_unfinished_requests(decode_batch.requests)
             if len(request_ids) < len(decode_batch.requests):

@@ -329,6 +329,13 @@ impl State {
             }
         }
 
+        if let Some(max_size) = max_size {
+            if max_size == 0 {
+                tracing::debug!("Parameter max_size = 0");
+                return None;
+            }
+        }
+
         self.entries.update();
 
         // Create span for this batch to add context to inference calls
@@ -355,7 +362,7 @@ impl State {
             if self.requires_padding {
                 // We pad to max input length in the Python shards
                 // We need to take these padding tokens into the equation
-                prefill_tokens = (batch_requests.len() + 1) as u32 * self.max_input_length;
+                prefill_tokens = (batch_requests.len() + 1) as u32 * entry.request.truncate;/*self.max_input_length;*/
             } else {
                 // pad to block size
                 prefill_tokens += ((entry.request.input_length + self.block_size - 1)
@@ -366,7 +373,7 @@ impl State {
             if self.requires_padding {
                 // We pad to max total tokens in the Python shards
                 // We need to take these padding tokens into the equation
-                decode_tokens = (batch_requests.len() + 1) as u32 * (self.max_total_tokens - self.max_input_length);
+                decode_tokens = (batch_requests.len() + 1) as u32 * entry.request.stopping_parameters.max_new_tokens;/*(self.max_total_tokens - self.max_input_length);*/
             } else {
                 let max_new_tokens = match self.window_size {
                     None => entry.request.stopping_parameters.max_new_tokens,

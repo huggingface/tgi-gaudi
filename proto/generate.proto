@@ -129,6 +129,8 @@ message CachedBatch {
     uint32 size = 3;
     /// Maximum number of tokens this batch will grow to
     uint32 max_tokens = 4;
+    /// Maximum number of tokens (input add output) per request contains
+    uint32 batch_max_tokens = 5;
 }
 
 enum FinishReason {

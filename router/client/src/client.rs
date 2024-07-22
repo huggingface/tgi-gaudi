@@ -122,11 +122,17 @@ impl Client {
         };
 
         // get all possible batch sizes
-        let decode_bucket_size: u32 = read_env_var("BATCH_BUCKET_SIZE", 8);
+        let mut decode_bucket_size: u32 = read_env_var("BATCH_BUCKET_SIZE", 8);
         let max_decode_batch_size: u32 = match max_batch_size {
             Some(max_batch_size) => max_batch_size as u32,
             None => decode_bucket_size
         };
+
+        let max_total_tokens_2_bs_pair_str = std::env::var("MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST".to_string()).unwrap_or("".to_string()).to_string();
+        if !max_total_tokens_2_bs_pair_str.trim().is_empty(){
+            decode_bucket_size = max_decode_batch_size;
+        }
+
         let decode_batch_sizes: Vec<u32> = (decode_bucket_size..max_decode_batch_size+1).step_by(decode_bucket_size as usize).collect();
 
         let prefill_bucket_size: u32 = read_env_var("PREFILL_BATCH_BUCKET_SIZE", 4);
