@@ -5,6 +5,7 @@ use crate::infer::InferStreamResponse;
 use crate::validation::ValidGenerateRequest;
 use nohash_hasher::{BuildNoHashHasher, IntMap};
 use std::cmp::min;
+use std::cmp::max;
 use std::cmp::{Eq, Ord, PartialEq, PartialOrd};
 use std::collections::BinaryHeap;
 use std::env;
@@ -362,7 +363,7 @@ impl State {
             if self.requires_padding {
                 // We pad to max input length in the Python shards
                 // We need to take these padding tokens into the equation
-                prefill_tokens = (batch_requests.len() + 1) as u32 * entry.request.truncate;/*self.max_input_length;*/
+                prefill_tokens = (batch_requests.len() + 1) as u32 * max(entry.request.truncate, 1);/*self.max_input_length;*/
             } else {
                 // pad to block size
                 prefill_tokens += ((entry.request.input_length + self.block_size - 1)
