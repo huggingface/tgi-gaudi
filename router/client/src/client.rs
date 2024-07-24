@@ -128,10 +128,10 @@ impl Client {
             None => decode_bucket_size
         };
 
-        let max_total_tokens_2_bs_pair_str = std::env::var("MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST".to_string()).unwrap_or("".to_string()).to_string();
-        if !max_total_tokens_2_bs_pair_str.trim().is_empty(){
-            decode_bucket_size = max_decode_batch_size;
-        }
+        let decode_bucket_size = match(std::env::var("MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST")) {
+            Ok(key) => max_decode_batch_size,
+            Err(_) => decode_bucket_size,
+        };
 
         let decode_batch_sizes: Vec<u32> = (decode_bucket_size..max_decode_batch_size+1).step_by(decode_bucket_size as usize).collect();
 
