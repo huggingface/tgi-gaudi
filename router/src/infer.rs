@@ -551,8 +551,8 @@ async fn batching_task(
     };
     let prefill_bucket_size: u32 = read_env_var("PREFILL_BATCH_BUCKET_SIZE", 4);
     let max_input_tokens: u32 = read_env_var("MAX_INPUT_TOKENS", 1024);
-    let use_adaptive_batching = !std::env::var("MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST".to_string()).unwrap_or("".to_string()).to_string().trim().is_empty();
-    let max_total_tokens_2_bs_pair_str = std::env::var("MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST".to_string()).unwrap_or("2048:48,4096:24,8192:12".to_string()).to_string();
+    let use_adaptive_batching = !std::env::var("MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST").unwrap_or_default().is_empty();
+    let max_total_tokens_2_bs_pair_str = std::env::var("MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST").unwrap_or("2048:48,4096:24,8192:12".to_string()).to_string();
 
     let tokens_2_bs = max_total_tokens_2_bs_pair_str.split(',').map(|s| s.split_at(s.find(":").unwrap()))
         .map(|(key, val)| (key.parse::<u32>().unwrap(), val[1..].parse::<u32>().unwrap())).collect();
