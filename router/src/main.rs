@@ -344,7 +344,7 @@ async fn main() -> Result<(), RouterError> {
 
     // Warmup model
     tracing::info!("Warming up model");
-    let max_total_tokens_2_bs_pair_str = std::env::var("MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST".to_string()).unwrap_or("".to_string()).to_string();
+    let max_total_tokens_2_bs_pair_str = std::env::var("MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST").unwrap_or_default();
     let mut tokens_2_bs: BTreeMap<u32, u32> = BTreeMap::new();
 
     if !max_total_tokens_2_bs_pair_str.trim().is_empty() {
