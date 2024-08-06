@@ -476,6 +476,7 @@ Except those already mentioned, there are other parameters that need to be prope
 
 - `PAD_SEQUENCE_TO_MULTIPLE_OF` determines sizes of input length buckets. Since warmup creates several graphs for each bucket, it's important to adjust that value proportionally to input sequence length. Otherwise, some out of memory issues can be observed.
 - `ENABLE_HPU_GRAPH` enables HPU graphs usage, which is crucial for performance results. Recommended value to keep is `true` .
+- `MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST` enables adaptive batching which means that the max total tokens and batch size will change according to the requests. For example, if you set MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST=2048:48,4096:24,8192:12 then the batch size 48 will be used when all the requests with total token within 2048. If requests with total token between 2048 and 4096 arrive then batch size 24 will be used. Default value is empty which means adaptive batching is not enabled.
 
 For more information and documentation about Text Generation Inference, checkout [the README](https://github.com/huggingface/text-generation-inference#text-generation-inference) of the original repo.
 
@@ -496,6 +497,7 @@ For more information and documentation about Text Generation Inference, checkout
 | QUEUE_THRESHOLD_MS          | integer    | 120              | Controls the threshold beyond which the request are considered overdue and handled with priority. Shorter requests are prioritized otherwise.                            | add -e in docker run command |
 | USE_FLASH_ATTENTION         | True/False | False            | Whether to enable Habana Flash Attention, provided that the model supports it. Currently only llama and mistral supports this feature. Please refer to https://docs.habana.ai/en/latest/PyTorch/Model_Optimization_PyTorch/Optimization_in_PyTorch_Models.html?highlight=fusedsdpa#using-fused-scaled-dot-product-attention-fusedsdpa |
 | FLASH_ATTENTION_RECOMPUTE   | True/False | False            | Whether to enable Habana Flash Attention in recompute mode on first token generation. |
+|MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST| string | empty       | Whether to enable adaptive batch. If this value is set the actual batch size will change according to the requests. | add -e in docker run command |
 
 </div>
 
