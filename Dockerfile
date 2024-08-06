@@ -70,6 +70,11 @@ COPY --from=builder /usr/src/target/release/text-generation-router /usr/local/bi
 # Install launcher
 COPY --from=builder /usr/src/target/release/text-generation-launcher /usr/local/bin/text-generation-launcher
 
+RUN python3 -m pip install --upgrade transformers accelerate
+RUN python3 -m pip install git+https://github.com/huggingface/transformers
+RUN python3 -m pip install git+https://github.com/endomorphosis/optimum-habana.git@transformers_4.43
+RUN python3 -m pip install git+https://github.com/endomorphosis/optimum
+
 # Final image
 FROM base
 
