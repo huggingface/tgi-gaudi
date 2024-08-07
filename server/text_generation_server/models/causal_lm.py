@@ -658,7 +658,7 @@ class CausalLM(Model):
             from habana_frameworks.torch.hpu import wrap_in_hpu_graph
             model = wrap_in_hpu_graph(model, disable_tensor_cache=True)
         else:
-            if LAZY_MODE == 0: 
+            if LAZY_MODE == 0:
                 # It is said that "keep_input_mutations" is safe for inference to be done
                 dbg_trace(
                     "TORCH COMPILE", f'Torch compiling of model')
@@ -684,7 +684,7 @@ class CausalLM(Model):
             "return_dict": True,
         }
 
-        if model.config.model_type in ["llama", "mistral"]:
+        if model.config.model_type in ["llama", "mistral", "starcoder2"]:
             kwargs["attn_softmax_bf16"] = True
             kwargs["trim_logits"] = True
 
@@ -986,7 +986,7 @@ class CausalLM(Model):
                 bypass_hpu_graph=prefill and self.limit_hpu_graph if self.enable_hpu_graph else None,
             )
         elif all([req.stopping_criteria.max_new_tokens == 1 for req in batch.requests]):
-            # Don't schedule next forward if max_new_tokens for all requests equals 1 
+            # Don't schedule next forward if max_new_tokens for all requests equals 1
             # - we've already generated the first and only needed token in the prefill phase
             pass
         else:
