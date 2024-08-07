@@ -5,7 +5,7 @@ import sys
 
 assert "habana_frameworks" not in sys.modules
 
-use_inc = os.getenv("USE_INC", "0") == "1"
+use_inc = os.getenv("USE_INC", "1")
 quant_config = os.getenv("QUANT_CONFIG", "")
 is_quantization_enabled = quant_config != ""
 
