@@ -60,7 +60,7 @@ RUN cd server && \
     make gen-server && \
     pip install -r requirements.txt && \
     bash ./dill-0.3.8-patch.sh && \
-    pip install git+https://github.com/HabanaAI/DeepSpeed.git@1.16.0 && \
+    pip install git+https://github.com/HabanaAI/DeepSpeed.git@1.17.0 && \
     pip install . --no-cache-dir
 
 # Install benchmarker
@@ -69,6 +69,8 @@ COPY --from=builder /usr/src/target/release/text-generation-benchmark /usr/local
 COPY --from=builder /usr/src/target/release/text-generation-router /usr/local/bin/text-generation-router
 # Install launcher
 COPY --from=builder /usr/src/target/release/text-generation-launcher /usr/local/bin/text-generation-launcher
+
+RUN python3 -m pip install --upgrade transformers accelerate
 
 # Final image
 FROM base
