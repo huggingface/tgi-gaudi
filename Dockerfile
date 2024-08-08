@@ -71,9 +71,6 @@ COPY --from=builder /usr/src/target/release/text-generation-router /usr/local/bi
 COPY --from=builder /usr/src/target/release/text-generation-launcher /usr/local/bin/text-generation-launcher
 
 #RUN python3 -m pip install --upgrade transformers accelerate
-#RUN python3 -m pip install git+https://github.com/huggingface/transformers
-#RUN python3 -m pip install git+https://github.com/huggingface/optimum-habana.git
-#RUN python3 -m pip install git+https://github.com/huggingface/optimum
 
 # Final image
 FROM base

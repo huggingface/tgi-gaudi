@@ -47,8 +47,7 @@ opentelemetry-proto==1.26.0 ; python_version >= "3.9" and python_version < "3.13
 opentelemetry-sdk==1.26.0 ; python_version >= "3.9" and python_version < "3.13"
 opentelemetry-semantic-conventions==0.47b0 ; python_version >= "3.9" and python_version < "3.13"
 git+https://github.com/huggingface/optimum-habana.git 
-#git+https://github.com/endomorphosis/optimum-habana.git
-git+https://github.com/endomorphosis/optimum
+git+https://github.com/huggingface/optimum
 packaging==24.1 ; python_version >= "3.9" and python_version < "3.13"
 pandas==2.2.2 ; python_version >= "3.9" and python_version < "3.13"
 peft==0.10.0 ; python_version >= "3.9" and python_version < "3.13"
@@ -73,7 +72,7 @@ sympy==1.12.1 ; python_version >= "3.9" and python_version < "3.13"
 tbb==2021.13.0 ; python_version >= "3.9" and python_version < "3.13" and platform_system == "Windows"
 tokenizers==0.19.1 ; python_version >= "3.9" and python_version < "3.13"
 tqdm==4.66.4 ; python_version >= "3.9" and python_version < "3.13"
-transformers==4.43.3 
+transformers==4.43.0 
 transformers[sentencepiece]==4.43.0 ; python_version >= "3.9" and python_version < "3.13"
 typer==0.6.1 ; python_version >= "3.9" and python_version < "3.13"
 typing-extensions==4.12.2 ; python_version >= "3.9" and python_version < "3.13"
