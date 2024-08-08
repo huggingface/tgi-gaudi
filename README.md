@@ -481,6 +481,41 @@ Except those already mentioned, there are other parameters that need to be prope
 For more information and documentation about Text Generation Inference, checkout [the README](https://github.com/huggingface/text-generation-inference#text-generation-inference) of the original repo.
 
 
+## Adaptive Batching
+
+For the large max-total-tokens (8K or 4K), if most request's total tokens are small (e.g. within 2048), enabling adaptive batching feature will improve the performance. When adaptive batching is enabled, the actual max batch size and the max total tokens will change according to the requests. For example, the parameter MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST is set to 2048:48,4096:24,8192:12. Then if all the request's max total tokens are smaller than or equal 2048 the actual batch size will be 48. If a request with 4096 max total tokens arrives then the actual batch size and actual max total tokens will change accordingly. There is a LLama 7b example as follows.
+
+```bash
+model=meta-llama/Meta-Llama-3-8B-Instruct
+hf_token=YOUR_ACCESS_TOKEN   # Llama3 is a gated model and requires a special access token
+volume=$PWD/data   # share a volume with the Docker container to avoid downloading weights every run
+
+docker run -p 8080:80 \
+   --runtime=habana \
+   -v $volume:/data \
+   -e HABANA_VISIBLE_DEVICES=all \
+   -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
+   -e HF_HUB_ENABLE_HF_TRANSFER=1 \
+   -e HUGGING_FACE_HUB_TOKEN=$hf_token \
+   -e PREFILL_BATCH_BUCKET_SIZE=4 \
+   -e BATCH_BUCKET_SIZE=12 \
+   -e MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST=2048:48,4096:24,8192:12 \
+   -e MAX_BATCH_TOTAL_TOKENS=98304 \
+   -e PAD_SEQUENCE_TO_MULTIPLE_OF=128 \
+   -e MAX_CONCURRENT_REQUESTS=512 \
+   -e WAITING_SERVED_RATIO=0.3 \
+   -e LIMIT_HPU_GRAPH=True \
+   -e ENABLE_HPU_GRAPH=True \
+   --cap-add=sys_nice \
+   --ipc=host \
+   ghcr.io/huggingface/tgi-gaudi:2.0.4 \
+   --model-id $model \
+   --max-input-tokens 4096 \
+   --max-batch-prefill-tokens 49152 \
+   --max-total-tokens 8192 \
+   --max-batch-size 12
+```
+
 ## Environment Variables
 
 <div align="left">
