@@ -39,13 +39,11 @@ ENV HUGGINGFACE_HUB_CACHE=/data \
     HF_HUB_ENABLE_HF_TRANSFER=1 \
     PORT=80
 
-# libssl.so.1.1 is not installed on Ubuntu 22.04 by default, install it
-RUN wget http://nz2.archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2_amd64.deb && \
-    dpkg -i ./libssl1.1_1.1.1f-1ubuntu2_amd64.deb
-
 WORKDIR /usr/src
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        linux-libc-dev \
+        openssh-client \
         libssl-dev \
         ca-certificates \
         make \
