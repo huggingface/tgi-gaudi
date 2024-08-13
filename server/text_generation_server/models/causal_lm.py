@@ -367,6 +367,7 @@ class CausalLMBatch(Batch):
         input_lengths = [b.input_length for b in batches]
         max_input_length = max(input_lengths)
         offsets = [max_input_length - b.input_length for b in batches]
+
         cur_padding = [b.right_padding for b in batches]
         # For prefill there is a space allocated only for first token
         # Need to add padding to the max total tokens before first decode
@@ -596,13 +597,15 @@ class CausalLM(Model):
         self,
         model_id: str,
         revision: Optional[str] = None,
-        use_medusa: Optional[str] = None,
+        speculator: Optional[str] = None,
         dtype: Optional[torch.dtype] = None,
         trust_remote_code: bool = False,
     ):
+
+        if speculator:
+            raise RuntimeError("Speculator decoding is not enabled for AutoModel")
+
         self.prev_bs = 0
-        if use_medusa:
-            raise RuntimeError("Medusa decoding is not enabled for AutoModel")
 
         # Create tokenizer
         tokenizer = AutoTokenizer.from_pretrained(
@@ -671,7 +674,14 @@ class CausalLM(Model):
             if model.config.pad_token_id is not None:
                 tokenizer.pad_token_id = model.config.pad_token_id
             elif model.config.eos_token_id is not None:
-                tokenizer.pad_token_id = model.config.eos_token_id
+                if isinstance(model.config.eos_token_id, int):
+                    tokenizer.pad_token_id = model.config.eos_token_id
+                elif isinstance(model.config.eos_token_id, list):
+                    tokenizer.pad_token_id = model.config.eos_token_id[0]
+                else:
+                    raise ValueError(
+                        f"{type(model.config.eos_token_id)} type of eos_token_id in the model's config is not supported for tokenizer.pad_token_id"
+                    )
             elif tokenizer.eos_token_id is not None:
                 tokenizer.pad_token_id = tokenizer.eos_token_id
             else:
