@@ -34,6 +34,9 @@ RUN cargo build --release
 # Text Generation Inference base image
 FROM vault.habana.ai/gaudi-docker/1.16.0/ubuntu22.04/habanalabs/pytorch-installer-2.2.2:latest as base
 
+# Remove lightning - due to CRITICAL vulnerability: CVE-2024-5980
+RUN pip uninstall -y lightning
+
 # Text Generation Inference base env
 ENV HUGGINGFACE_HUB_CACHE=/data \
     HF_HUB_ENABLE_HF_TRANSFER=1 \
