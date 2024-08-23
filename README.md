@@ -28,8 +28,8 @@ limitations under the License.
     - [LLama 7b FP8 on 1 Gaudi2 card](#llama-7b-fp8-on-1-gaudi2-card)
     - [LLama 70b BF16 on 8 Gaudi2 card](#llama-70b-bf16-on-8-gaudi2-card)
     - [LLama 70b FP8 on 8 Gaudi2 card](#llama-70b-fp8-on-8-gaudi2-card)
-    - [LLava-next 7B BF16 on 1 Gaudi2 card](#llava-next-7b-bf16-on-1-gaudi2-card)
-    - [LLava-next 7B FP8 on 1 Gaudi2 card](#llava-next-7b-fp8-on-1-gaudi2-card)
+    - [llava-v1.6-mistral-7b-hf BF16 on 1 Gaudi2 card](#llava-v16-mistral-7b-hf-bf16-on-1-gaudi2-card)
+    - [llava-v1.6-mistral-7b-hf FP8 on 1 Gaudi2 card](#llava-v16-mistral-7b-hf-fp8-on-1-gaudi2-card)
   - [Environment variables](#environment-variables)
   - [Profiler](#profiler)
 
@@ -250,7 +250,7 @@ docker run -p 8080:80 \
    --num-shard 8
 ```
 
-### LLava-next 7B BF16 on 1 Gaudi2 card
+### llava-v1.6-mistral-7b-hf BF16 on 1 Gaudi2 card
 
 Image usually occupy about 2000 tokens in input, For examples image of size 512x512 occupys about 2800 tokens. max-input-tokens must be larger than the token number of image. Otherwise the image may be truncated. We set the BASE_IMAGE_TOKENS=2048 as the default image tokens number, it is the minimum value of max-input-tokens. If you want to change the BASE_IMAGE_TOKENS value,
 Please set the environment variable BASE_IMAGE_TOKENS. The warmup will generate graphs with input length from BASE_IMAGE_TOKENS to max-input-tokens. For LLava-next 7B model the maximum value of max-batch-prefill-tokens is 16384. The max-batch-prefill-tokens is an integer multiple of max-input-tokens. because of prefill_batch_size = max-batch-prefill-tokens/max-input-tokens.
@@ -278,16 +278,7 @@ docker run -p 8080:80 \
 
 Please implement the inference client according to the [tutorial](https://github.com/huggingface/tgi-gaudi/blob/habana-main/docs/source/basic_tutorials/visual_language_models.md).
 
-### LLava-next 7B FP8 on 1 Gaudi2 card
-Copy the quantization_config directory from [optimum-habana](https://github.com/huggingface/optimum-habana/tree/main/examples/image-to-text/quantization_config) into $PWD.
-Generate the hqt_output by running the following example in [optimum-habana example](https://github.com/huggingface/optimum-habana/tree/main/examples/image-to-text). Copy the hqt_output into $PWD.
-```bash
-QUANT_CONFIG=./quantization_config/maxabs_measure.json python run_pipeline.py \
---model_name_or_path llava-hf/llava-v1.6-mistral-7b-hf \
---image_path "https://llava-vl.github.io/static/images/view.jpg" \
---use_hpu_graphs \
---bf16 --use_flash_attention
-```
+### llava-v1.6-mistral-7b-hf FP8 on 1 Gaudi2 card
 
 ```bash
 model=llava-hf/llava-v1.6-mistral-7b-hf
