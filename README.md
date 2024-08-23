@@ -276,7 +276,13 @@ docker run -p 8080:80 \
    --max-total-tokens 8192
 ```
 
-Please implement the inference client according to the [tutorial](https://github.com/huggingface/tgi-gaudi/blob/habana-main/docs/source/basic_tutorials/visual_language_models.md).
+Send the simple request.
+```bash
+curl -N 127.0.0.1:8080/generate_stream \
+    -X POST \
+    -d '{"inputs":"![](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/rabbit.png)What is this a picture of?\n\n","parameters":{"max_new_tokens":16, "seed": 42}}' \
+    -H 'Content-Type: application/json'
+```
 
 ### llava-v1.6-mistral-7b-hf FP8 on 1 Gaudi2 card
 
