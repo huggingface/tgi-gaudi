@@ -18,12 +18,24 @@ limitations under the License.
 
 ## Table of contents
 
+-
 - [Running TGI on Gaudi](#running-tgi-on-gaudi)
 - [Adjusting TGI parameters](#adjusting-tgi-parameters)
 - [Running TGI with FP8 precision](#running-tgi-with-fp8-precision)
-- [Currently supported configurations](#currently-supported-configurations)
+- [Supported Models And Configurations](#supported-models-and-configurations)
+   - [Llama-2-7b](#llama-2-7b)
+   - [Llama-2-70b](#llama-2-70b)
+   - [Mistral-7b-Instruct-v0.2](#mistral-7b-Instruct-v0.2)
+   - [Mixtral-7B-Instruct-v-0.1](#mixtral-7B-instruct-v-0.1)
+   - [Code-Llama-13B](#code-llama-13B)
+   - [starcoder2-3b](#starcoder2-3b)
+   - [llava-v1.6-mistral-7b-hf](#llava-v1.6-mistral-7b-hf)
+   - [Llama-3-8B]()
+   - [Meta-Llama-3-70B](#meta-llama-3-70B)
+   - [Qwen/Qwen2-7B-Instruct](#Qwen2-7B-Instruct)
 - [Environment variables](#environment-variables)
 - [Profiler](#profiler)
+
 
 ## Running TGI on Gaudi
 
@@ -115,12 +127,18 @@ Additional hints to quantize model for TGI when using `run_lm_eval.py`:
 * try to model your use case situation by adjusting `--batch_size` , `--max_new_tokens 512` and `--max_input_tokens 512`; in case of memory issues, lower those values
 * use dataset/tasks suitable for your use case (see `--help` for defining tasks/datasets)
 
-## Currently supported configurations
+
+## Supported Models And Configurations
 
 Not all features of TGI are currently supported as this is still a work in progress.
-Currently supported and validated configurations (other configurations are not guaranteed to work or ensure reasonable performance):
 
-### LLama 7b BF16 on 1 Gaudi2 card
+Please note that the model warmup can take several minutes, especially for FP8 configs. To minimize this time in consecutive runs, please refer to [Disk Caching Eviction Policy](https://docs.habana.ai/en/latest/PyTorch/Model_Optimization_PyTorch/Optimization_in_PyTorch_Models.html#disk-caching-eviction-policy). Other sequence lengths can be used with proportionally decreased/increased batch size (the higher sequence length, the lower batch size).
+Support for other models from Optimum Habana will be added successively.
+
+Currently supported and validated models with configurations (other configurations are not guaranteed to work or ensure reasonable performance):
+
+### Llama-2-7b
+#### BF16 on 1 Gaudi2 card
 
 ```bash
 model=meta-llama/Llama-2-7b-chat-hf
@@ -147,7 +165,7 @@ docker run -p 8080:80 \
    --max-batch-size 16
 ```
 
-### LLama 7b FP8 on 1 Gaudi2 card
+#### FP8 on 1 Gaudi2 card
 
 ```bash
 model=meta-llama/Llama-2-7b-chat-hf
@@ -177,7 +195,10 @@ docker run -p 8080:80 \
    --max-batch-size 64
 ```
 
-### LLama 70b BF16 on 8 Gaudi2 card
+
+### Llama 2 70b
+
+#### BF16 on 8 Gaudi2 cards
 
 ```bash
 model=meta-llama/Llama-2-70b-chat-hf
@@ -208,7 +229,7 @@ docker run -p 8080:80 \
    --num-shard 8
 ```
 
-### LLama 70b FP8 on 8 Gaudi2 card
+#### FP8 on 8 Gaudi2 cards
 
 ```bash
 model=meta-llama/Llama-2-70b-chat-hf
@@ -242,10 +263,109 @@ docker run -p 8080:80 \
    --num-shard 8
 ```
 
-Please note that the model warmup can take several minutes, especially for FP8 configs. To minimize this time in consecutive runs, please refer to [Disk Caching Eviction Policy](https://docs.habana.ai/en/latest/PyTorch/Model_Optimization_PyTorch/Optimization_in_PyTorch_Models.html#disk-caching-eviction-policy).
 
-Other sequence lengths can be used with proportionally decreased/increased batch size (the higher sequence length, the lower batch size).
-Support for other models from Optimum Habana will be added successively.
+### Mistral 7b Instruct v0.2
+
+#### BF16 on 1 Gaudi2 card
+
+```bash
+model=mistralai/Mistral-7B-Instruct-v0.2
+hf_token=YOUR_ACCESS_TOKEN
+volume=$PWD/data
+
+docker run -p 8080:80 \
+   --runtime=habana \
+   -v $volume:/data \
+   -e PT_HPU_ENABLE_LAZY_COLLECTIVES=true \
+   -e HABANA_VISIBLE_DEVICES=all \
+   -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
+   -e HF_HUB_ENABLE_HF_TRANSFER=1 \
+   -e HUGGING_FACE_HUB_TOKEN=$hf_token \
+   -e PREFILL_BATCH_BUCKET_SIZE=1 \
+   -e BATCH_BUCKET_SIZE=1 \
+   -e PAD_SEQUENCE_TO_MULTIPLE_OF=2000 \
+   -e USE_FLASH_ATTENTION=true \
+   -e FLASH_ATTENTION_RECOMPUTE=true \
+   -e ENABLE_HPU_GRAPH=true \
+   -e LIMIT_HPU_GRAPH=true
+   --cap-add=sys_nice \
+   --ipc=host \
+   ghcr.io/huggingface/tgi-gaudi:2.0.1 \
+   --model-id $model \
+   --max-input-length 32000 \
+   --max-total-tokens 32512  \
+   --max-batch-prefill-tokens 32000  \
+   --max-batch-total-tokens 227584
+```
+
+#### FP8 on 1 Gaudi2 card
+
+```bash
+model=mistralai/Mistral-7B-Instruct-v0.2
+hf_token=YOUR_ACCESS_TOKEN
+volume=$PWD/data
+
+docker run -p 8080:80 \
+   --runtime=habana \
+   -v $volume:/data \
+   -v $PWD/quantization_config:/usr/src/quantization_config \
+   -v $PWD/hqt_output:/usr/src/hqt_output \
+   -e QUANT_CONFIG=./quantization_config/maxabs_quant.json \
+   -e PT_HPU_ENABLE_LAZY_COLLECTIVES=true \
+   -e HABANA_VISIBLE_DEVICES=all \
+   -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
+   -e HF_HUB_ENABLE_HF_TRANSFER=1 \
+   -e HUGGING_FACE_HUB_TOKEN=$hf_token \
+   -e PREFILL_BATCH_BUCKET_SIZE=1 \
+   -e BATCH_BUCKET_SIZE=1 \
+   -e PAD_SEQUENCE_TO_MULTIPLE_OF=2000 \
+   -e USE_FLASH_ATTENTION=true \
+   -e FLASH_ATTENTION_RECOMPUTE=true \
+   -e ENABLE_HPU_GRAPH=true \
+   -e LIMIT_HPU_GRAPH=true
+   --cap-add=sys_nice \
+   --ipc=host \
+   ghcr.io/huggingface/tgi-gaudi:2.0.1 \
+   --model-id $model \
+   --max-input-length 32000 \
+   --max-total-tokens 32512  \
+   --max-batch-prefill-tokens 32000  \
+   --max-batch-total-tokens 227584
+```
+
+### Mixtral 7B Instruct v0.1
+
+#### FP8 on 1 Gaudi2 card
+
+```bash
+model=mistralai/Mixtral-8x7B-Instruct-v0.1
+hf_token=YOUR_ACCESS_TOKEN
+volume=$PWD/data
+docker run -p 8080:80 \
+   --runtime=habana \
+   -v $volume:/data \
+   -v $PWD/quantization_config:/usr/src/quantization_config \
+   -v $PWD/hqt_output:/usr/src/hqt_output \
+   -e QUANT_CONFIG=./quantization_config/maxabs_quant_mixtral.json \
+    -e PT_HPU_ENABLE_LAZY_COLLECTIVES=true \
+    -e HABANA_VISIBLE_DEVICES=all \
+    -e PREFILL_BATCH_BUCKET_SIZE=1 \
+    -e BATCH_BUCKET_SIZE=1 \
+    -e PAD_SEQUENCE_TO_MULTIPLE_OF=4000 \
+    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
+    -e ENABLE_HPU_GRAPH=true \
+    -e LIMIT_HPU_GRAPH=true \
+    -e USE_FLASH_ATTENTION=true \
+    -e FLASH_ATTENTION_RECOMPUTE=true \
+   --cap-add=sys_nice \
+   --ipc=host \
+   ghcr.io/huggingface/tgi-gaudi:2.0.1 \
+   --model-id $model \
+    --max-input-length 32000 \
+    --max-total-tokens 32512 \
+    --max-batch-prefill-tokens 32000 \
+    --max-batch-total-tokens 97536
+```
 
 ## Environment variables
 
