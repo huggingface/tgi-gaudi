@@ -23,14 +23,7 @@ limitations under the License.
   - [Running TGI on Gaudi](#running-tgi-on-gaudi)
   - [Adjusting TGI parameters](#adjusting-tgi-parameters)
   - [Running TGI with FP8 precision](#running-tgi-with-fp8-precision)
-  - [Currently supported configurations](#currently-supported-configurations)
-    - [LLama 7b BF16 on 1 Gaudi2 card](#llama-7b-bf16-on-1-gaudi2-card)
-    - [LLama 7b FP8 on 1 Gaudi2 card](#llama-7b-fp8-on-1-gaudi2-card)
-    - [LLama 70b BF16 on 8 Gaudi2 card](#llama-70b-bf16-on-8-gaudi2-card)
-    - [LLama 70b FP8 on 8 Gaudi2 card](#llama-70b-fp8-on-8-gaudi2-card)
-    - [Llava-next](#llava-next)
-      - [llava-v1.6-mistral-7b-hf BF16 on 1 Gaudi2 card](#llava-v16-mistral-7b-hf-bf16-on-1-gaudi2-card)
-      - [llava-v1.6-mistral-7b-hf FP8 on 1 Gaudi2 card](#llava-v16-mistral-7b-hf-fp8-on-1-gaudi2-card)
+  - [Currently supported Models/Configurations](#currently-supported-configurations)
   - [Environment variables](#environment-variables)
   - [Profiler](#profiler)
 
@@ -129,7 +122,24 @@ Additional hints to quantize model for TGI when using `run_lm_eval.py`:
 Not all features of TGI are currently supported as this is still a work in progress.
 Currently supported and validated configurations (other configurations are not guaranteed to work or ensure reasonable performance):
 
-### LLama 7b BF16 on 1 Gaudi2 card
+| Model                    | BF16 | FP8 | Single card | Multi cards |
+| ------------------------ | ---- | --- | ----------- | ----------- |
+| Llama 2 7B               | Yes  | Yes | Yes         | No          |
+| Llama 2 70B              | Yes  | Yes | No          | Yes         |
+| Llama 3 8B               | Yes  | Yes | Yes         | No          |
+| Llama 3 70B              | Yes  | Yes | No          | Yes         |
+| Llama 3.1 8B             | Yes  | Yes | Yes         | No          |
+| Llama 3.1 70B            | Yes  | Yes | Yes         | Yes         |
+| Llava v1.6 mistral 7b    | Yes  | Yes | Yes         | No          |
+| CodeLlama 13b            | Yes  | Yes | Yes         | No          |
+| Starcoder2 3b            | Yes  | Yes | Yes         | No          |
+| Mixtral 8x 7B            | Yes  | Yes | Yes         | Yes         |
+| Mistral 7B Instruct v0.2 | Yes  | Yes | Yes         | Yes         |
+
+
+### LLama 7b
+
+### BF16
 
 ```bash
 model=meta-llama/Llama-2-7b-chat-hf
@@ -141,11 +151,12 @@ docker run -p 8080:80 \
    -v $volume:/data \
    -e HABANA_VISIBLE_DEVICES=all \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
-   -e HF_HUB_ENABLE_HF_TRANSFER=1 \
-   -e HUGGING_FACE_HUB_TOKEN=$hf_token \
-   -e PREFILL_BATCH_BUCKET_SIZE=1 \
-   -e BATCH_BUCKET_SIZE=16 \
-   -e PAD_SEQUENCE_TO_MULTIPLE_OF=128 \
+   -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
+   -e LIMIT_HPU_GRAPH=true \
+   -e MAX_TOTAL_TOKENS=2048 \
+   -e PREFILL_BATCH_BUCKET_SIZE=2 \
+   -e BATCH_BUCKET_SIZE=32 \
+   -e PAD_SEQUENCE_TO_MULTIPLE_OF=256 \
    -e ENABLE_HPU_GRAPH=true \
    -e LIMIT_HPU_GRAPH=true \
    -e USE_FLASH_ATTENTION=true \
@@ -154,13 +165,14 @@ docker run -p 8080:80 \
    --ipc=host \
    ghcr.io/huggingface/tgi-gaudi:2.0.4 \
    --model-id $model \
-   --max-input-tokens 1024 \
-   --max-batch-prefill-tokens 4096 \
-   --max-total-tokens 2048 \
-   --max-batch-size 16
+   --max-input-length 1024 --max-total-tokens 2048 \
+   --max-batch-prefill-tokens 2048 --max-batch-total-tokens 65536 \
+   --max-waiting-tokens 7 --waiting-served-ratio 1.2 --max-concurrent-requests 64
 ```
 
-### LLama 7b FP8 on 1 Gaudi2 card
+
+
+#### FP8
 
 ```bash
 model=meta-llama/Llama-2-7b-chat-hf
@@ -172,29 +184,31 @@ docker run -p 8080:80 \
    -v $volume:/data \
    -v $PWD/quantization_config:/usr/src/quantization_config \
    -v $PWD/hqt_output:/usr/src/hqt_output \
+   -e QUANT_CONFIG=./quantization_config/maxabs_quant.json \
    -e HABANA_VISIBLE_DEVICES=all \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
-   -e HF_HUB_ENABLE_HF_TRANSFER=1 \
-   -e HUGGING_FACE_HUB_TOKEN=$hf_token \
-   -e PREFILL_BATCH_BUCKET_SIZE=1 \
-   -e BATCH_BUCKET_SIZE=16 \
-   -e PAD_SEQUENCE_TO_MULTIPLE_OF=128 \
+   -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
+   -e LIMIT_HPU_GRAPH=true \
+   -e MAX_TOTAL_TOKENS=2048 \
+   -e PREFILL_BATCH_BUCKET_SIZE=2 \
+   -e BATCH_BUCKET_SIZE=32 \
+   -e PAD_SEQUENCE_TO_MULTIPLE_OF=256 \
    -e ENABLE_HPU_GRAPH=true \
    -e LIMIT_HPU_GRAPH=true \
    -e USE_FLASH_ATTENTION=true \
    -e FLASH_ATTENTION_RECOMPUTE=true \
-   -e QUANT_CONFIG=./quantization_config/maxabs_quant.json \
    --cap-add=sys_nice \
    --ipc=host \
    ghcr.io/huggingface/tgi-gaudi:2.0.4 \
    --model-id $model \
-   --max-input-tokens 1024 \
-   --max-batch-prefill-tokens 4096 \
-   --max-total-tokens 2048 \
-   --max-batch-size 16
+   --max-input-length 1024 --max-total-tokens 2048 \
+   --max-batch-prefill-tokens 2048 --max-batch-total-tokens 65536 \
+   --max-waiting-tokens 7 --waiting-served-ratio 1.2 --max-concurrent-requests 64
 ```
 
-### LLama 70b BF16 on 8 Gaudi2 card
+### LLama 70b
+
+#### BF16
 
 ```bash
 model=meta-llama/Llama-2-70b-chat-hf
@@ -206,12 +220,13 @@ docker run -p 8080:80 \
    -v $volume:/data \
    -e HABANA_VISIBLE_DEVICES=all \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
-   -e HF_HUB_ENABLE_HF_TRANSFER=1 \
-   -e HUGGING_FACE_HUB_TOKEN=$hf_token \
+   -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
+   -e LIMIT_HPU_GRAPH=true \
    -e PT_HPU_ENABLE_LAZY_COLLECTIVES=true \
-   -e PREFILL_BATCH_BUCKET_SIZE=1 \
+   -e MAX_TOTAL_TOKENS=2048 \
    -e BATCH_BUCKET_SIZE=256 \
-   -e PAD_SEQUENCE_TO_MULTIPLE_OF=128 \
+   -e PREFILL_BATCH_BUCKET_SIZE=4 \
+   -e PAD_SEQUENCE_TO_MULTIPLE_OF=64 \
    -e ENABLE_HPU_GRAPH=true \
    -e LIMIT_HPU_GRAPH=true \
    -e USE_FLASH_ATTENTION=true \
@@ -219,17 +234,13 @@ docker run -p 8080:80 \
    --cap-add=sys_nice \
    --ipc=host \
    ghcr.io/huggingface/tgi-gaudi:2.0.4 \
-   --model-id $model \
-   --max-input-tokens 1024 \
-   --max-batch-prefill-tokens 16384 \
-   --max-total-tokens 2048 \
-   --max-batch-size 256 \
-   --max-concurrent-requests 400 \
-   --sharded true \
-   --num-shard 8
+   --sharded true --num-shard 8 \
+   --max-input-length 1024 --max-total-tokens 2048 \
+   --max-batch-prefill-tokens 4096 --max-batch-total-tokens 524288 \
+   --max-waiting-tokens 7 --waiting-served-ratio 1.2 --max-concurrent-requests 512
 ```
 
-### LLama 70b FP8 on 8 Gaudi2 card
+#### FP8
 
 ```bash
 model=meta-llama/Llama-2-70b-chat-hf
@@ -241,36 +252,36 @@ docker run -p 8080:80 \
    -v $volume:/data \
    -v $PWD/quantization_config:/usr/src/quantization_config \
    -v $PWD/hqt_output:/usr/src/hqt_output \
+   -e QUANT_CONFIG=./quantization_config/maxabs_quant.json \
    -e HABANA_VISIBLE_DEVICES=all \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
-   -e HF_HUB_ENABLE_HF_TRANSFER=1 \
-   -e HUGGING_FACE_HUB_TOKEN=$hf_token \
+   -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
+   -e LIMIT_HPU_GRAPH=true \
    -e PT_HPU_ENABLE_LAZY_COLLECTIVES=true \
-   -e PREFILL_BATCH_BUCKET_SIZE=1 \
+   -e MAX_TOTAL_TOKENS=2048 \
    -e BATCH_BUCKET_SIZE=256 \
-   -e PAD_SEQUENCE_TO_MULTIPLE_OF=128 \
+   -e PREFILL_BATCH_BUCKET_SIZE=4 \
+   -e PAD_SEQUENCE_TO_MULTIPLE_OF=64 \
    -e ENABLE_HPU_GRAPH=true \
    -e LIMIT_HPU_GRAPH=true \
    -e USE_FLASH_ATTENTION=true \
    -e FLASH_ATTENTION_RECOMPUTE=true \
-   -e QUANT_CONFIG=./quantization_config/maxabs_quant.json \
    --cap-add=sys_nice \
    --ipc=host \
    ghcr.io/huggingface/tgi-gaudi:2.0.4 \
-   --model-id $model \
-   --max-input-tokens 1024 \
-   --max-batch-prefill-tokens 16384 \
-   --max-total-tokens 2048 \
-   --max-batch-size 256 \
-   --max-concurrent-requests 400 \
-   --sharded true \
-   --num-shard 8
+   --sharded true --num-shard 8 \
+   --max-input-length 1024 --max-total-tokens 2048 \
+   --max-batch-prefill-tokens 4096 --max-batch-total-tokens 524288 \
+   --max-waiting-tokens 7 --waiting-served-ratio 1.2 --max-concurrent-requests 512
 ```
-### Llava-next
 
-#### llava-v1.6-mistral-7b-hf BF16 on 1 Gaudi2 card
+### Llava-next (Llava v1.6 Mistral 7b)
 
 An image usually accounts for 2000 input tokens. For example, an image of size 512x512 is represented by 2800 tokens. Thus, `max-input-tokens` must be larger than the number of tokens associated to the image. Otherwise the image may be truncated. We set `BASE_IMAGE_TOKENS=2048` as the default image token number. This is the minimum value of `max-input-tokens`. You can override the environment variable `BASE_IMAGE_TOKENS` to change this value. The warmup will generate graphs with input length from `BASE_IMAGE_TOKENS` to `max-input-tokens`. For LLava-next 7B, the value of `max-batch-prefill-tokens` is 16384, which is calcualted as follows: `prefill_batch_size` = `max-batch-prefill-tokens` / `max-input-tokens`.
+
+Multi-card Llava-next inference is currently not supported.
+
+#### BF16
 
 ```bash
 model=llava-hf/llava-v1.6-mistral-7b-hf
@@ -284,13 +295,18 @@ docker run -p 8080:80 \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
    -e HF_HUB_ENABLE_HF_TRANSFER=1 \
    -e HUGGING_FACE_HUB_TOKEN=$hf_token \
+   -e ENABLE_HPU_GRAPH=true \
+   -e LIMIT_HPU_GRAPH=true \
+   -e USE_FLASH_ATTENTION=true \
+   -e FLASH_ATTENTION_RECOMPUTE=true \
+    -e PREFILL_BATCH_BUCKET_SIZE=1 \
+    -e BATCH_BUCKET_SIZE=1 \
    --cap-add=sys_nice \
    --ipc=host \
-   ghcr.io/huggingface/tgi-gaudi:2.0.1 \
+   ghcr.io/huggingface/tgi-gaudi:2.0.4 \
    --model-id $model \
-   --max-input-tokens 4096 \
-   --max-batch-prefill-tokens 16384 \
-   --max-total-tokens 8192
+   --max-input-tokens 4096 --max-batch-prefill-tokens 16384 \
+   --max-total-tokens 8192 --max-batch-total-tokens 32768
 ```
 
 Send the simple request.
@@ -301,9 +317,9 @@ curl -N 127.0.0.1:8080/generate_stream \
     -H 'Content-Type: application/json'
 ```
 
-Multi-card Llava-next inference is currently not supported.
 
-#### llava-v1.6-mistral-7b-hf FP8 on 1 Gaudi2 card
+
+#### FP8
 
 ```bash
 model=llava-hf/llava-v1.6-mistral-7b-hf
@@ -315,20 +331,23 @@ docker run -p 8080:80 \
    -v $volume:/data \
    -v $PWD/quantization_config:/usr/src/quantization_config \
    -v $PWD/hqt_output:/usr/src/hqt_output \
+   -e QUANT_CONFIG=./quantization_config/maxabs_quant.json \
    -e HABANA_VISIBLE_DEVICES=all \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
    -e HF_HUB_ENABLE_HF_TRANSFER=1 \
    -e HUGGING_FACE_HUB_TOKEN=$hf_token \
-   -e QUANT_CONFIG=./quantization_config/maxabs_quant.json \
+   -e ENABLE_HPU_GRAPH=true \
+   -e LIMIT_HPU_GRAPH=true \
    -e USE_FLASH_ATTENTION=true \
    -e FLASH_ATTENTION_RECOMPUTE=true \
+    -e PREFILL_BATCH_BUCKET_SIZE=1 \
+    -e BATCH_BUCKET_SIZE=1 \
    --cap-add=sys_nice \
    --ipc=host \
-   ghcr.io/huggingface/tgi-gaudi:2.0.1 \
+   ghcr.io/huggingface/tgi-gaudi:2.0.4 \
    --model-id $model \
-   --max-input-tokens 4096 \
-   --max-batch-prefill-tokens 16384 \
-   --max-total-tokens 8192
+   --max-input-tokens 4096 --max-batch-prefill-tokens 16384 \
+   --max-total-tokens 8192 --max-batch-total-tokens 32768
 ```
 
 Please note that the model warmup can take several minutes, especially for FP8 configs. To minimize this time in consecutive runs, please refer to [Disk Caching Eviction Policy](https://docs.habana.ai/en/latest/PyTorch/Model_Optimization_PyTorch/Optimization_in_PyTorch_Models.html#disk-caching-eviction-policy).
