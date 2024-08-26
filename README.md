@@ -18,12 +18,21 @@ limitations under the License.
 
 ## Table of contents
 
-- [Running TGI on Gaudi](#running-tgi-on-gaudi)
-- [Adjusting TGI parameters](#adjusting-tgi-parameters)
-- [Running TGI with FP8 precision](#running-tgi-with-fp8-precision)
-- [Currently supported configurations](#currently-supported-configurations)
-- [Environment variables](#environment-variables)
-- [Profiler](#profiler)
+- [Text Generation Inference on Habana Gaudi](#text-generation-inference-on-habana-gaudi)
+  - [Table of contents](#table-of-contents)
+  - [Running TGI on Gaudi](#running-tgi-on-gaudi)
+  - [Adjusting TGI parameters](#adjusting-tgi-parameters)
+  - [Running TGI with FP8 precision](#running-tgi-with-fp8-precision)
+  - [Currently supported configurations](#currently-supported-configurations)
+    - [LLama 7b BF16 on 1 Gaudi2 card](#llama-7b-bf16-on-1-gaudi2-card)
+    - [LLama 7b FP8 on 1 Gaudi2 card](#llama-7b-fp8-on-1-gaudi2-card)
+    - [LLama 70b BF16 on 8 Gaudi2 card](#llama-70b-bf16-on-8-gaudi2-card)
+    - [LLama 70b FP8 on 8 Gaudi2 card](#llama-70b-fp8-on-8-gaudi2-card)
+    - [Llava-next](#llava-next)
+      - [llava-v1.6-mistral-7b-hf BF16 on 1 Gaudi2 card](#llava-v16-mistral-7b-hf-bf16-on-1-gaudi2-card)
+      - [llava-v1.6-mistral-7b-hf FP8 on 1 Gaudi2 card](#llava-v16-mistral-7b-hf-fp8-on-1-gaudi2-card)
+  - [Environment variables](#environment-variables)
+  - [Profiler](#profiler)
 
 ## Running TGI on Gaudi
 
@@ -102,7 +111,7 @@ For more information and documentation about Text Generation Inference, checkout
 
 ## Running TGI with FP8 precision
 
-TGI supports FP8 precision runs within the limits provided by [Habana Quantization Toolkit](https://docs.habana.ai/en/latest/PyTorch/Inference_on_PyTorch/Inference_Using_FP8.html). Models with FP8 can be ran by properly setting QUANT_CONFIG environment variable. Detailed instruction on how to use that variable can be found in [Optimum Habana FP8 guide](https://github.com/huggingface/optimum-habana/tree/main/examples/text-generation#running-with-fp8). Summarising that instruction in TGI cases:
+TGI supports FP8 precision runs within the limits provided by [Intel Neural Compressor (INC)](https://docs.habana.ai/en/latest/PyTorch/Inference_on_PyTorch/Inference_Using_FP8.html). Models with FP8 can be ran by properly setting QUANT_CONFIG environment variable. Detailed instruction on how to use that variable can be found in [Optimum Habana FP8 guide](https://github.com/huggingface/optimum-habana/tree/main/examples/text-generation#running-with-fp8). From 2.0.4 release, Intel Neural Compressor (INC) is used by default for measuring and quantization. Habana Quantization Toolkit(HQT) will be removed in future releases. To use HQT, disable INC by setting `-e USE_INC=0`. Summarising that instruction in TGI cases:
 
 1. Measure quantization statistics of requested model by using [Optimum Habana measurement script](https://github.com/huggingface/optimum-habana/tree/main/examples/text-generation#running-with-fp8:~:text=use_deepspeed%20%2D%2Dworld_size%208-,run_lm_eval.py,-%5C%0A%2Do%20acc_70b_bs1_measure.txt)
 2. Run requested model in TGI with proper QUANT_CONFIG setting - e.g. `-e QUANT_CONFIG=./quantization_config/maxabs_quant.json`.
@@ -137,6 +146,10 @@ docker run -p 8080:80 \
    -e PREFILL_BATCH_BUCKET_SIZE=1 \
    -e BATCH_BUCKET_SIZE=16 \
    -e PAD_SEQUENCE_TO_MULTIPLE_OF=128 \
+   -e ENABLE_HPU_GRAPH=true \
+   -e LIMIT_HPU_GRAPH=true \
+   -e USE_FLASH_ATTENTION=true \
+   -e FLASH_ATTENTION_RECOMPUTE=true \
    --cap-add=sys_nice \
    --ipc=host \
    ghcr.io/huggingface/tgi-gaudi:2.0.4 \
@@ -164,8 +177,12 @@ docker run -p 8080:80 \
    -e HF_HUB_ENABLE_HF_TRANSFER=1 \
    -e HUGGING_FACE_HUB_TOKEN=$hf_token \
    -e PREFILL_BATCH_BUCKET_SIZE=1 \
-   -e BATCH_BUCKET_SIZE=64 \
+   -e BATCH_BUCKET_SIZE=16 \
    -e PAD_SEQUENCE_TO_MULTIPLE_OF=128 \
+   -e ENABLE_HPU_GRAPH=true \
+   -e LIMIT_HPU_GRAPH=true \
+   -e USE_FLASH_ATTENTION=true \
+   -e FLASH_ATTENTION_RECOMPUTE=true \
    -e QUANT_CONFIG=./quantization_config/maxabs_quant.json \
    --cap-add=sys_nice \
    --ipc=host \
@@ -174,7 +191,7 @@ docker run -p 8080:80 \
    --max-input-tokens 1024 \
    --max-batch-prefill-tokens 4096 \
    --max-total-tokens 2048 \
-   --max-batch-size 64
+   --max-batch-size 16
 ```
 
 ### LLama 70b BF16 on 8 Gaudi2 card
@@ -195,6 +212,10 @@ docker run -p 8080:80 \
    -e PREFILL_BATCH_BUCKET_SIZE=1 \
    -e BATCH_BUCKET_SIZE=256 \
    -e PAD_SEQUENCE_TO_MULTIPLE_OF=128 \
+   -e ENABLE_HPU_GRAPH=true \
+   -e LIMIT_HPU_GRAPH=true \
+   -e USE_FLASH_ATTENTION=true \
+   -e FLASH_ATTENTION_RECOMPUTE=true \
    --cap-add=sys_nice \
    --ipc=host \
    ghcr.io/huggingface/tgi-gaudi:2.0.4 \
@@ -226,8 +247,12 @@ docker run -p 8080:80 \
    -e HUGGING_FACE_HUB_TOKEN=$hf_token \
    -e PT_HPU_ENABLE_LAZY_COLLECTIVES=true \
    -e PREFILL_BATCH_BUCKET_SIZE=1 \
-   -e BATCH_BUCKET_SIZE=512 \
+   -e BATCH_BUCKET_SIZE=256 \
    -e PAD_SEQUENCE_TO_MULTIPLE_OF=128 \
+   -e ENABLE_HPU_GRAPH=true \
+   -e LIMIT_HPU_GRAPH=true \
+   -e USE_FLASH_ATTENTION=true \
+   -e FLASH_ATTENTION_RECOMPUTE=true \
    -e QUANT_CONFIG=./quantization_config/maxabs_quant.json \
    --cap-add=sys_nice \
    --ipc=host \
@@ -236,10 +261,74 @@ docker run -p 8080:80 \
    --max-input-tokens 1024 \
    --max-batch-prefill-tokens 16384 \
    --max-total-tokens 2048 \
-   --max-batch-size 512 \
-   --max-concurrent-requests 700 \
+   --max-batch-size 256 \
+   --max-concurrent-requests 400 \
    --sharded true \
    --num-shard 8
+```
+### Llava-next
+
+#### llava-v1.6-mistral-7b-hf BF16 on 1 Gaudi2 card
+
+An image usually accounts for 2000 input tokens. For example, an image of size 512x512 is represented by 2800 tokens. Thus, `max-input-tokens` must be larger than the number of tokens associated to the image. Otherwise the image may be truncated. We set `BASE_IMAGE_TOKENS=2048` as the default image token number. This is the minimum value of `max-input-tokens`. You can override the environment variable `BASE_IMAGE_TOKENS` to change this value. The warmup will generate graphs with input length from `BASE_IMAGE_TOKENS` to `max-input-tokens`. For LLava-next 7B, the value of `max-batch-prefill-tokens` is 16384, which is calcualted as follows: `prefill_batch_size` = `max-batch-prefill-tokens` / `max-input-tokens`.
+
+```bash
+model=llava-hf/llava-v1.6-mistral-7b-hf
+hf_token=YOUR_ACCESS_TOKEN   # HF access token
+volume=$PWD/data   # share a volume with the Docker container to avoid downloading weights every run
+
+docker run -p 8080:80 \
+   --runtime=habana \
+   -v $volume:/data \
+   -e HABANA_VISIBLE_DEVICES=all \
+   -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
+   -e HF_HUB_ENABLE_HF_TRANSFER=1 \
+   -e HUGGING_FACE_HUB_TOKEN=$hf_token \
+   --cap-add=sys_nice \
+   --ipc=host \
+   ghcr.io/huggingface/tgi-gaudi:2.0.1 \
+   --model-id $model \
+   --max-input-tokens 4096 \
+   --max-batch-prefill-tokens 16384 \
+   --max-total-tokens 8192
+```
+
+Send the simple request.
+```bash
+curl -N 127.0.0.1:8080/generate_stream \
+    -X POST \
+    -d '{"inputs":"![](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/rabbit.png)What is this a picture of?\n\n","parameters":{"max_new_tokens":16, "seed": 42}}' \
+    -H 'Content-Type: application/json'
+```
+
+Multi-card Llava-next inference is currently not supported.
+
+#### llava-v1.6-mistral-7b-hf FP8 on 1 Gaudi2 card
+
+```bash
+model=llava-hf/llava-v1.6-mistral-7b-hf
+hf_token=YOUR_ACCESS_TOKEN   # HF access token
+volume=$PWD/data   # share a volume with the Docker container to avoid downloading weights every run
+
+docker run -p 8080:80 \
+   --runtime=habana \
+   -v $volume:/data \
+   -v $PWD/quantization_config:/usr/src/quantization_config \
+   -v $PWD/hqt_output:/usr/src/hqt_output \
+   -e HABANA_VISIBLE_DEVICES=all \
+   -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
+   -e HF_HUB_ENABLE_HF_TRANSFER=1 \
+   -e HUGGING_FACE_HUB_TOKEN=$hf_token \
+   -e QUANT_CONFIG=./quantization_config/maxabs_quant.json \
+   -e USE_FLASH_ATTENTION=true \
+   -e FLASH_ATTENTION_RECOMPUTE=true \
+   --cap-add=sys_nice \
+   --ipc=host \
+   ghcr.io/huggingface/tgi-gaudi:2.0.1 \
+   --model-id $model \
+   --max-input-tokens 4096 \
+   --max-batch-prefill-tokens 16384 \
+   --max-total-tokens 8192
 ```
 
 Please note that the model warmup can take several minutes, especially for FP8 configs. To minimize this time in consecutive runs, please refer to [Disk Caching Eviction Policy](https://docs.habana.ai/en/latest/PyTorch/Model_Optimization_PyTorch/Optimization_in_PyTorch_Models.html#disk-caching-eviction-policy).
