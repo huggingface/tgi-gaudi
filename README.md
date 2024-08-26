@@ -127,7 +127,6 @@ docker run -p 8080:80 \
    -e HUGGING_FACE_HUB_TOKEN=$hf_token \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
    -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
-   -e LIMIT_HPU_GRAPH=true \
    -e MAX_TOTAL_TOKENS=2048 \
    -e PREFILL_BATCH_BUCKET_SIZE=2 \
    -e BATCH_BUCKET_SIZE=32 \
@@ -159,7 +158,6 @@ docker run -p 8080:80 \
    -e HUGGING_FACE_HUB_TOKEN=$hf_token \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
    -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
-   -e LIMIT_HPU_GRAPH=true \
    -e PT_HPU_ENABLE_LAZY_COLLECTIVES=true \
    -e MAX_TOTAL_TOKENS=2048 \
    -e BATCH_BUCKET_SIZE=256 \
@@ -193,7 +191,6 @@ docker run -p 8080:80 \
    -e HUGGING_FACE_HUB_TOKEN=$hf_token \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
    -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
-   -e LIMIT_HPU_GRAPH=true \
    -e MAX_TOTAL_TOKENS=2048 \
    -e PREFILL_BATCH_BUCKET_SIZE=2 \
    -e BATCH_BUCKET_SIZE=32 \
@@ -225,7 +222,6 @@ docker run -p 8080:80 \
    -e HUGGING_FACE_HUB_TOKEN=$hf_token \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
    -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
-   -e LIMIT_HPU_GRAPH=true \
    -e PT_HPU_ENABLE_LAZY_COLLECTIVES=true \
    -e MAX_TOTAL_TOKENS=2048 \
    -e BATCH_BUCKET_SIZE=256 \
@@ -310,7 +306,6 @@ docker run -p 8080:80 \
    -e HUGGING_FACE_HUB_TOKEN=$hf_token \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
    -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
-   -e LIMIT_HPU_GRAPH=true \
    -e MAX_TOTAL_TOKENS=2048 \
    -e PREFILL_BATCH_BUCKET_SIZE=2 \
    -e BATCH_BUCKET_SIZE=32 \
@@ -345,7 +340,6 @@ docker run -p 8080:80 \
    -e HUGGING_FACE_HUB_TOKEN=$hf_token \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
    -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
-   -e LIMIT_HPU_GRAPH=true \
    -e PT_HPU_ENABLE_LAZY_COLLECTIVES=true \
    -e MAX_TOTAL_TOKENS=2048 \
    -e BATCH_BUCKET_SIZE=256 \
@@ -383,7 +377,6 @@ docker run -p 8080:80 \
    -e HUGGING_FACE_HUB_TOKEN=$hf_token \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
    -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
-   -e LIMIT_HPU_GRAPH=true \
    -e MAX_TOTAL_TOKENS=2048 \
    -e PREFILL_BATCH_BUCKET_SIZE=2 \
    -e BATCH_BUCKET_SIZE=32 \
@@ -418,7 +411,6 @@ docker run -p 8080:80 \
    -e HUGGING_FACE_HUB_TOKEN=$hf_token \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
    -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
-   -e LIMIT_HPU_GRAPH=true \
    -e PT_HPU_ENABLE_LAZY_COLLECTIVES=true \
    -e MAX_TOTAL_TOKENS=2048 \
    -e BATCH_BUCKET_SIZE=256 \
