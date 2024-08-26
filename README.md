@@ -172,6 +172,7 @@ docker run -p 8080:80 \
    --cap-add=sys_nice \
    --ipc=host \
    ghcr.io/huggingface/tgi-gaudi:2.0.4 \
+   --model-id $model \
    --sharded true --num-shard 8 \
    --max-input-length 1024 --max-total-tokens 2048 \
    --max-batch-prefill-tokens 4096 --max-batch-total-tokens 524288 \
@@ -237,6 +238,7 @@ docker run -p 8080:80 \
    --cap-add=sys_nice \
    --ipc=host \
    ghcr.io/huggingface/tgi-gaudi:2.0.4 \
+   --model-id $model \
    --sharded true --num-shard 8 \
    --max-input-length 1024 --max-total-tokens 2048 \
    --max-batch-prefill-tokens 4096 --max-batch-total-tokens 524288 \
@@ -356,6 +358,7 @@ docker run -p 8080:80 \
    --cap-add=sys_nice \
    --ipc=host \
    ghcr.io/huggingface/tgi-gaudi:2.0.4 \
+   --model-id $model \
    --sharded true --num-shard 8 \
    --max-input-length 1024 --max-total-tokens 2048 \
    --max-batch-prefill-tokens 4096 --max-batch-total-tokens 524288 \
@@ -428,6 +431,7 @@ docker run -p 8080:80 \
    --cap-add=sys_nice \
    --ipc=host \
    ghcr.io/huggingface/tgi-gaudi:2.0.4 \
+   --model-id $model \
    --sharded true --num-shard 8 \
    --max-input-length 1024 --max-total-tokens 2048 \
    --max-batch-prefill-tokens 4096 --max-batch-total-tokens 524288 \
