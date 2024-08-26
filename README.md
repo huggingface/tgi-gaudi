@@ -45,26 +45,29 @@ To use [🤗 text-generation-inference](https://github.com/huggingface/text-gene
     i. On 1 Gaudi card
    ```bash
    model=meta-llama/Llama-2-7b-hf
+   hf_token=YOUR_ACCESS_TOKEN
    volume=$PWD/data # share a volume with the Docker container to avoid downloading weights every run
 
-   docker run -p 8080:80 -v $volume:/data --runtime=habana -e HABANA_VISIBLE_DEVICES=all -e OMPI_MCA_btl_vader_single_copy_mechanism=none -e ENABLE_HPU_GRAPH=true -e LIMIT_HPU_GRAPH=true -e USE_FLASH_ATTENTION=true -e FLASH_ATTENTION_RECOMPUTE=true --cap-add=sys_nice --ipc=host ghcr.io/huggingface/tgi-gaudi:2.0.4 --model-id $model --max-input-tokens 1024 --max-total-tokens 2048
+   docker run -p 8080:80 -v $volume:/data --runtime=habana -e HABANA_VISIBLE_DEVICES=all -e OMPI_MCA_btl_vader_single_copy_mechanism=none -e HUGGING_FACE_HUB_TOKEN=$hf_token -e ENABLE_HPU_GRAPH=true -e LIMIT_HPU_GRAPH=true -e USE_FLASH_ATTENTION=true -e FLASH_ATTENTION_RECOMPUTE=true --cap-add=sys_nice --ipc=host ghcr.io/huggingface/tgi-gaudi:2.0.4 --model-id $model --max-input-tokens 1024 --max-total-tokens 2048
    ```
    > For gated models such as [StarCoder](https://huggingface.co/bigcode/starcoder), you will have to pass `-e HUGGING_FACE_HUB_TOKEN=<token>` to the `docker run` command above with a valid Hugging Face Hub read token.
 
     ii. On 1 Gaudi card using PyTorch eager mode with torch compile:
    ```bash
    model=meta-llama/Llama-2-7b-hf
+   hf_token=YOUR_ACCESS_TOKEN
    volume=$PWD/data # share a volume with the Docker container to avoid downloading weights every run
 
-   docker run -p 8080:80 -v $volume:/data --runtime=habana -e HABANA_VISIBLE_DEVICES=all -e PT_HPU_LAZY_MODE=0 -e OMPI_MCA_btl_vader_single_copy_mechanism=none --cap-add=sys_nice --ipc=host ghcr.io/huggingface/tgi-gaudi:2.0.4 --model-id $model --max-input-tokens 1024 --max-total-tokens 2048
+   docker run -p 8080:80 -v $volume:/data --runtime=habana -e HABANA_VISIBLE_DEVICES=all -e PT_HPU_LAZY_MODE=0 -e OMPI_MCA_btl_vader_single_copy_mechanism=none -e HUGGING_FACE_HUB_TOKEN=$hf_token --cap-add=sys_nice --ipc=host ghcr.io/huggingface/tgi-gaudi:2.0.4 --model-id $model --max-input-tokens 1024 --max-total-tokens 2048
    ```
 
     iii. On 8 Gaudi cards:
    ```bash
    model=meta-llama/Llama-2-70b-hf
+   hf_token=YOUR_ACCESS_TOKEN
    volume=$PWD/data # share a volume with the Docker container to avoid downloading weights every run
 
-   docker run -p 8080:80 -v $volume:/data --runtime=habana -e PT_HPU_ENABLE_LAZY_COLLECTIVES=true -e HABANA_VISIBLE_DEVICES=all -e OMPI_MCA_btl_vader_single_copy_mechanism=none  -e ENABLE_HPU_GRAPH=true -e LIMIT_HPU_GRAPH=true -e USE_FLASH_ATTENTION=true -e FLASH_ATTENTION_RECOMPUTE=true --cap-add=sys_nice --ipc=host ghcr.io/huggingface/tgi-gaudi:2.0.4 --model-id $model --sharded true --num-shard 8 --max-input-tokens 1024 --max-total-tokens 2048
+   docker run -p 8080:80 -v $volume:/data --runtime=habana -e PT_HPU_ENABLE_LAZY_COLLECTIVES=true -e HABANA_VISIBLE_DEVICES=all -e OMPI_MCA_btl_vader_single_copy_mechanism=none -e HUGGING_FACE_HUB_TOKEN=$hf_token -e ENABLE_HPU_GRAPH=true -e LIMIT_HPU_GRAPH=true -e USE_FLASH_ATTENTION=true -e FLASH_ATTENTION_RECOMPUTE=true --cap-add=sys_nice --ipc=host ghcr.io/huggingface/tgi-gaudi:2.0.4 --model-id $model --sharded true --num-shard 8 --max-input-tokens 1024 --max-total-tokens 2048
    ```
 3. You can then send a simple request:
    ```bash
@@ -115,12 +118,13 @@ The following are command examples for TGI models inference with BF16 precision.
 ```bash
 model=meta-llama/Llama-2-7b-chat-hf
 hf_token=YOUR_ACCESS_TOKEN
-volume=$PWD/data # share a volume with the Docker container to avoid downloading weights every run
+volume=$PWD/data   # share a volume with the Docker container to avoid downloading weights every run
 
 docker run -p 8080:80 \
    --runtime=habana \
    -v $volume:/data \
    -e HABANA_VISIBLE_DEVICES=all \
+   -e HUGGING_FACE_HUB_TOKEN=$hf_token \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
    -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
    -e LIMIT_HPU_GRAPH=true \
@@ -152,6 +156,7 @@ docker run -p 8080:80 \
    --runtime=habana \
    -v $volume:/data \
    -e HABANA_VISIBLE_DEVICES=all \
+   -e HUGGING_FACE_HUB_TOKEN=$hf_token \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
    -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
    -e LIMIT_HPU_GRAPH=true \
@@ -184,6 +189,7 @@ docker run -p 8080:80 \
    --runtime=habana \
    -v $volume:/data \
    -e HABANA_VISIBLE_DEVICES=all \
+   -e HUGGING_FACE_HUB_TOKEN=$hf_token \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
    -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
    -e LIMIT_HPU_GRAPH=true \
@@ -208,13 +214,14 @@ docker run -p 8080:80 \
 
 ```bash
 model=meta-llama/Meta-Llama-3.1-70B-Instruct
-hf_token=YOUR_ACCESS_TOKEN   # Llama2 is a gated model and requires a special access token
+hf_token=YOUR_ACCESS_TOKEN
 volume=$PWD/data   # share a volume with the Docker container to avoid downloading weights every run
 
 docker run -p 8080:80 \
    --runtime=habana \
    -v $volume:/data \
    -e HABANA_VISIBLE_DEVICES=all \
+   -e HUGGING_FACE_HUB_TOKEN=$hf_token \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
    -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
    -e LIMIT_HPU_GRAPH=true \
@@ -298,6 +305,7 @@ docker run -p 8080:80 \
    -v $PWD/hqt_output:/usr/src/hqt_output \
    -e QUANT_CONFIG=./quantization_config/maxabs_quant.json \
    -e HABANA_VISIBLE_DEVICES=all \
+   -e HUGGING_FACE_HUB_TOKEN=$hf_token \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
    -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
    -e LIMIT_HPU_GRAPH=true \
@@ -332,6 +340,7 @@ docker run -p 8080:80 \
    -v $PWD/hqt_output:/usr/src/hqt_output \
    -e QUANT_CONFIG=./quantization_config/maxabs_quant.json \
    -e HABANA_VISIBLE_DEVICES=all \
+   -e HUGGING_FACE_HUB_TOKEN=$hf_token \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
    -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
    -e LIMIT_HPU_GRAPH=true \
@@ -368,6 +377,7 @@ docker run -p 8080:80 \
    -v $PWD/hqt_output:/usr/src/hqt_output \
    -e QUANT_CONFIG=./quantization_config/maxabs_quant.json \
    -e HABANA_VISIBLE_DEVICES=all \
+   -e HUGGING_FACE_HUB_TOKEN=$hf_token \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
    -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
    -e LIMIT_HPU_GRAPH=true \
@@ -392,7 +402,7 @@ docker run -p 8080:80 \
 
 ```bash
 model=meta-llama/Meta-Llama-3.1-70B-Instruct
-hf_token=YOUR_ACCESS_TOKEN   # Llama2 is a gated model and requires a special access token
+hf_token=YOUR_ACCESS_TOKEN
 volume=$PWD/data   # share a volume with the Docker container to avoid downloading weights every run
 
 docker run -p 8080:80 \
@@ -402,6 +412,7 @@ docker run -p 8080:80 \
    -v $PWD/hqt_output:/usr/src/hqt_output \
    -e QUANT_CONFIG=./quantization_config/maxabs_quant.json \
    -e HABANA_VISIBLE_DEVICES=all \
+   -e HUGGING_FACE_HUB_TOKEN=$hf_token \
    -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
    -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
    -e LIMIT_HPU_GRAPH=true \
