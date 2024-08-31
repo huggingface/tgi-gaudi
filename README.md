@@ -24,6 +24,7 @@ limitations under the License.
   - [Running TGI with BF16 Precision](#running-tgi-with-bf16-precision)
   - [Running TGI with FP8 Precision](#running-tgi-with-fp8-precision)
   - [Adjusting TGI Parameters](#adjusting-tgi-parameters)
+  - [Adaptive Batching](#adaptive-batching)
   - [Environment variables](#environment-variables)
   - [Profiler](#profiler)
 
@@ -505,6 +506,8 @@ docker run -p 8080:80 \
    -e MAX_CONCURRENT_REQUESTS=512 \
    -e WAITING_SERVED_RATIO=0.3 \
    -e LIMIT_HPU_GRAPH=True \
+   -e USE_FLASH_ATTENTION=true \
+   -e FLASH_ATTENTION_RECOMPUTE=true \
    -e ENABLE_HPU_GRAPH=True \
    --cap-add=sys_nice \
    --ipc=host \
