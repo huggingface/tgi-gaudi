@@ -172,7 +172,8 @@ class LlavaNextForConditionalGeneration(GaudiLlavaNextForConditionalGeneration):
                     batch_size, num_patches, num_channels, height, width = pixel_values.shape
                     reshaped_pixel_values = pixel_values.view(batch_size * num_patches, num_channels, height, width)
                     image_features = self.vision_tower(
-                        reshaped_pixel_values, output_hidden_states=True,
+                        reshaped_pixel_values,
+                        output_hidden_states=True,
                         use_flash_attention=use_flash_attention,
                         flash_attention_recompute=flash_attention_recompute,
                     )
