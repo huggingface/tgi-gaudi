@@ -41,6 +41,8 @@ pub struct Infer {
     chat_template: Option<ChatTemplate>,
     /// Inference limit
     limit_concurrent_requests: Arc<Semaphore>,
+    /// Enable adaptive batching
+    enable_adaptive_batching: bool,
 }
 
 /// Infer shared state
@@ -116,6 +118,7 @@ impl Infer {
 
         // Inference limit with a semaphore
         let semaphore = Arc::new(Semaphore::new(max_concurrent_requests));
+        let use_adaptive_batching = !std::env::var("MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST").unwrap_or_default().is_empty();
 
         Self {
             validation,
@@ -123,6 +126,7 @@ impl Infer {
             shared,
             chat_template,
             limit_concurrent_requests: semaphore,
+            enable_adaptive_batching: use_adaptive_batching,
         }
     }
 
@@ -150,19 +154,20 @@ impl Infer {
             err
         })?;
 
-        let read_env_var = |key: &str, default: u32| -> u32 {
-            std::env::var(key).ok().map_or(default, |value| value.parse::<u32>().unwrap())
-        };
-        let pad: u32 = read_env_var("PAD_SEQUENCE_TO_MULTIPLE_OF", 128);
-        fn norm_truncate(truncate: u32, p: u32) -> u32{
-            let mut upper = p;
-            while truncate > upper {
-                upper = upper * 2;
+        if self.enable_adaptive_batching {
+            let read_env_var = |key: &str, default: u32| -> u32 {
+                std::env::var(key).ok().map_or(default, |value| value.parse::<u32>().unwrap())
+            };
+            let pad: u32 = read_env_var("PAD_SEQUENCE_TO_MULTIPLE_OF", 128);
+            fn norm_truncate(truncate: u32, p: u32) -> u32{
+                let mut upper = p;
+                while truncate > upper {
+                    upper = upper * 2;
+                }
+                return upper;
             }
-            return upper;
+            v_request.truncate = norm_truncate(v_request.input_length, pad);
         }
-
-        v_request.truncate = norm_truncate(v_request.input_length, pad);
         let valid_request = v_request;
 
         // MPSC channel to communicate with the background batching task
@@ -549,8 +554,10 @@ async fn batching_task(
     let read_env_var = |key: &str, default: u32| -> u32 {
         std::env::var(key).ok().map_or(default, |value| value.parse::<u32>().unwrap())
     };
+
     let prefill_bucket_size: u32 = read_env_var("PREFILL_BATCH_BUCKET_SIZE", 4);
     let max_input_tokens: u32 = read_env_var("MAX_INPUT_TOKENS", 1024);
+
     let use_adaptive_batching = !std::env::var("MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST").unwrap_or_default().is_empty();
     let max_total_tokens_2_bs_pair_str = std::env::var("MAX_TOTAL_TOKENS_2_MAX_BATCH_SIZE_LIST").unwrap_or("2048:48,4096:24,8192:12".to_string()).to_string();
 
@@ -619,17 +626,16 @@ async fn batching_task(
                     return *key
                 }
 
-                let max_bs = max_tokens_2_max_bs(&tokens_2_bs, max_total_tokens);
-                let diff_size = max_bs - batch_size;
-
-                let max_by_prefill: u32 = max_batch_prefill_tokens / max_input_tokens;
-                let max_by_bucket: u32 = (diff_size / prefill_bucket_size) * prefill_bucket_size;
-                let v = vec![max_by_prefill, max_by_bucket];
-                let min_value = *v.iter().min().unwrap();
-
                 let token_budget = max_batch_total_tokens.saturating_sub(batch_max_tokens);
                 let mut max_size = max_batch_size.map(|max_size| max_size - batch_size as usize);
                 if use_adaptive_batching {
+                    let max_bs = max_tokens_2_max_bs(&tokens_2_bs, max_total_tokens);
+                    let diff_size = max_bs - batch_size;
+
+                    let max_by_prefill: u32 = max_batch_prefill_tokens / max_input_tokens;
+                    let max_by_bucket: u32 = (diff_size / prefill_bucket_size) * prefill_bucket_size;
+                    let v = vec![max_by_prefill, max_by_bucket];
+                    let min_value = *v.iter().min().unwrap();
                     max_size = Some(min_value as usize);
                 }
 
