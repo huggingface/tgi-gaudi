@@ -461,6 +461,38 @@ docker run -p 8080:80 \
    --max-total-tokens 8192 --max-batch-total-tokens 32768
 ```
 
+### Llava-v1.6-Mistral-7B on 8 Cards
+
+```bash
+model=llava-hf/llava-v1.6-mistral-7b-hf
+volume=$PWD/data   # share a volume with the Docker container to avoid downloading weights every run
+
+docker run -p 8080:80 \
+   --runtime=habana \
+   -v $volume:/data \
+   -v $PWD/quantization_config:/usr/src/quantization_config \
+   -v $PWD/hqt_output:/usr/src/hqt_output \
+   -e QUANT_CONFIG=./quantization_config/maxabs_quant.json \
+   -e HABANA_VISIBLE_DEVICES=all \
+   -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
+   -e TEXT_GENERATION_SERVER_IGNORE_EOS_TOKEN=true \
+   -e PT_HPU_ENABLE_LAZY_COLLECTIVES=true \
+   -e HF_HUB_ENABLE_HF_TRANSFER=1 \
+   -e ENABLE_HPU_GRAPH=true \
+   -e LIMIT_HPU_GRAPH=true \
+   -e USE_FLASH_ATTENTION=true \
+   -e FLASH_ATTENTION_RECOMPUTE=true \
+    -e PREFILL_BATCH_BUCKET_SIZE=1 \
+    -e BATCH_BUCKET_SIZE=1 \
+   --cap-add=sys_nice \
+   --ipc=host \
+   ghcr.io/huggingface/tgi-gaudi:2.0.4 \
+   --model-id $model \
+   --sharded true --num-shard 8 \
+   --max-input-tokens 4096 --max-batch-prefill-tokens 16384 \
+   --max-total-tokens 8192 --max-batch-total-tokens 32768
+```
+
 ## Adjusting TGI Parameters
 
 Maximum sequence length is controlled by two arguments:
