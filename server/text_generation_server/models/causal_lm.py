@@ -92,7 +92,6 @@ def biggest_single_chunk(offset):
         return 0
 
 
-@torch_compile_for_eager
 def grouped_pad(tensor_groups, dims, values):
     grouped_result = []
     for tensors, dim, value in zip(tensor_groups, dims, values):
@@ -125,7 +124,6 @@ def grouped_roll(tensor_groups, chunk, dims, merge_graphs):
     return tensor_groups
 
 
-@torch_compile_for_eager
 def grouped_shift(tensor_groups, dims, offset, merge_graphs):
     chunks = calculate_chunks(offset)
     for c in chunks:
@@ -155,7 +153,6 @@ def extend_tensor(tensor, padding, dim):
     return result
 
 
-@torch_compile_for_eager
 def extend_batch(tensors, target_bs, dim):
     diff = target_bs - tensors[0].size(dim)
     # TODO: add support for shrinking bs
@@ -173,14 +170,12 @@ def grouped_extend_batch(tensor_groups, target_bs, bs_dims):
     return tensor_groups
 
 
-@torch_compile_for_eager
 def merge(tensor_group):
     tensor_group = [torch.stack(tensor_group)]
     htorch.core.mark_step()
     return tensor_group
 
 
-@torch_compile_for_eager
 def split(tensor_group, clone_data):
     tensor_group = [t.squeeze(0) for t in torch.split(tensor_group[0], 1)]
     if clone_data:
