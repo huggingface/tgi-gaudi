@@ -44,7 +44,7 @@ To use [🤗 text-generation-inference](https://github.com/huggingface/text-gene
 > [!NOTE]
 > For gated models such as [meta-llama/Llama-2-7b-hf](https://huggingface.co/meta-llama/Llama-2-7b-hf), you will have to pass `-e HF_TOKEN=<token>` to the `docker run` commands below with a valid Hugging Face Hub read token.
 
-    i. On 1 Gaudi card
+   i. On 1 Gaudi card
    ```bash
    model=meta-llama/Llama-2-7b-hf
    hf_token=YOUR_ACCESS_TOKEN
@@ -58,7 +58,7 @@ To use [🤗 text-generation-inference](https://github.com/huggingface/text-gene
    --max-total-tokens 2048
    ```
 
-    ii. On 1 Gaudi card using PyTorch eager mode with torch compile:
+   ii. On 1 Gaudi card using PyTorch eager mode with torch compile:
    ```bash
    model=meta-llama/Llama-2-7b-hf
    hf_token=YOUR_ACCESS_TOKEN
@@ -70,7 +70,7 @@ To use [🤗 text-generation-inference](https://github.com/huggingface/text-gene
     ghcr.io/huggingface/tgi-gaudi:2.0.5 --model-id $model --max-input-tokens 1024 --max-total-tokens 2048
    ```
 
-    iii. On 8 Gaudi cards:
+   iii. On 8 Gaudi cards:
    ```bash
    model=meta-llama/Llama-2-70b-hf
    hf_token=YOUR_ACCESS_TOKEN
