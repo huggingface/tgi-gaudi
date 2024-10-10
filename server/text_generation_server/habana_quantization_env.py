@@ -19,7 +19,7 @@ if is_quantization_enabled:
 def prepare_model_for_quantization(model):
     if is_quantization_enabled:
         htorch.core.hpu_set_env()
-        if model.config.model_type == "llama":
+        if model.config.model_type in ["llama", "falcon", "qwen2", "starcoder2", "gemma"]:
             patch_scoped_linear_all_reduce(model)
         from neural_compressor.torch.quantization import FP8Config, convert
         config = FP8Config.from_json_file(quant_config)
