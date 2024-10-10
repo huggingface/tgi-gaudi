@@ -26,6 +26,7 @@ def prepare_model_for_quantization(model):
         model = convert(model, config)
         return model
 
+
 def setup_quantization(model):
     if is_quantization_enabled:
         htorch.core.quantization._mark_params_as_const(model)

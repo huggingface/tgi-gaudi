@@ -796,15 +796,6 @@ class CausalLM(Model):
             'type': rope_scaling, 'factor': float(rope_factor)
         }
 
-    def patch_scoped_linear_all_reduce(self, model):
-        from deepspeed.module_inject.layers import LinearAllreduce
-        from optimum.habana.transformers.models.modeling_all_models import ScopedLinearAllReduce
-        for name, module in model.named_children():
-            if type(module) is LinearAllreduce:
-                SL = ScopedLinearAllReduce(mod=module)
-                setattr(model, name, SL)
-            self.patch_scoped_linear_all_reduce(module)
-
     @property
     def batch_type(self) -> Type[CausalLMBatch]:
         return CausalLMBatch
