@@ -11,20 +11,19 @@ if is_quantization_enabled:
     os.environ.setdefault("USE_DEFAULT_QUANT_PARAM", "true")
     os.environ.setdefault("UPDATE_GRAPH_OUTPUT_MME", "false")
     os.environ.setdefault("ENABLE_CALC_DYNAMIC_RANGE", "false")
-    os.environ.setdefault(
-        "UPDATE_MME_OUTPUT_PRECISION_FILTER", "v_proj,matmul_av")
+    os.environ.setdefault("UPDATE_MME_OUTPUT_PRECISION_FILTER", "v_proj,matmul_av")
     os.environ.setdefault("EXPERIMENTAL_WEIGHT_SHARING", "FALSE")
 
 
-def prepare_model_for_quantization(model):
-    if is_quantization_enabled:
-        htorch.core.hpu_set_env()
-        if model.config.model_type in ["llama", "falcon", "qwen2", "starcoder2", "gemma"]:
-            patch_scoped_linear_all_reduce(model)
-        from neural_compressor.torch.quantization import FP8Config, convert
-        config = FP8Config.from_json_file(quant_config)
-        model = convert(model, config)
-        return model
+def patch_scoped_linear_all_reduce(model):
+    from deepspeed.module_inject.layers import LinearAllreduce
+    from optimum.habana.transformers.models.modeling_all_models import ScopedLinearAllReduce
+
+    for name, module in model.named_children():
+        if type(module) is LinearAllreduce:
+            SL = ScopedLinearAllReduce(mod=module)
+            setattr(model, name, SL)
+        patch_scoped_linear_all_reduce(module)
 
 
 def setup_quantization(model):
@@ -35,11 +34,13 @@ def setup_quantization(model):
     return model
 
 
-def patch_scoped_linear_all_reduce(model):
-    from deepspeed.module_inject.layers import LinearAllreduce
-    from optimum.habana.transformers.models.modeling_all_models import ScopedLinearAllReduce
-    for name, module in model.named_children():
-        if type(module) is LinearAllreduce:
-            SL = ScopedLinearAllReduce(mod=module)
-            setattr(model, name, SL)
-        patch_scoped_linear_all_reduce(module)
+def prepare_model_for_quantization(model):
+    if is_quantization_enabled:
+        htorch.core.hpu_set_env()
+        if model.config.model_type in ["llama", "falcon", "qwen2", "starcoder2", "gemma"]:
+            patch_scoped_linear_all_reduce(model)
+        from neural_compressor.torch.quantization import FP8Config, convert
+
+        config = FP8Config.from_json_file(quant_config)
+        model = convert(model, config)
+    return model
