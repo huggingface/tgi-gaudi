@@ -1,6 +1,7 @@
 # Copyright (C) 2024 Habana Labs, Ltd. an Intel Company.
 
 import os
+import habana_frameworks.torch as htorch
 
 quant_config = os.getenv("QUANT_CONFIG", "")
 is_quantization_enabled = quant_config != ""
@@ -17,11 +18,27 @@ if is_quantization_enabled:
 
 def prepare_model_for_quantization(model):
     if is_quantization_enabled:
-        if os.getenv("USE_INC", "1") != "0":
-            from neural_compressor.torch.quantization import FP8Config, convert
-            config = FP8Config.from_json_file(quant_config)
-            model = convert(model, config)
-        else:
-            import habana_quantization_toolkit
-            habana_quantization_toolkit.prep_model(model)
+        htorch.core.hpu_set_env()
+        if model.config.model_type == "llama":
+            patch_scoped_linear_all_reduce(model)
+        from neural_compressor.torch.quantization import FP8Config, convert
+        config = FP8Config.from_json_file(quant_config)
+        model = convert(model, config)
         return model
+
+def setup_quantization(model):
+    if is_quantization_enabled:
+        htorch.core.quantization._mark_params_as_const(model)
+        htorch.core.quantization._check_params_as_const(model)
+        htorch.core.hpu_initialize(model)
+    return model
+
+
+def patch_scoped_linear_all_reduce(model):
+    from deepspeed.module_inject.layers import LinearAllreduce
+    from optimum.habana.transformers.models.modeling_all_models import ScopedLinearAllReduce
+    for name, module in model.named_children():
+        if type(module) is LinearAllreduce:
+            SL = ScopedLinearAllReduce(mod=module)
+            setattr(model, name, SL)
+        patch_scoped_linear_all_reduce(module)
