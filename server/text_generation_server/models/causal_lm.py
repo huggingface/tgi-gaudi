@@ -997,24 +997,18 @@ class CausalLM(Model):
         else:
             token_idx = torch.tensor(batch.attention_mask.shape[-1] - batch.right_padding).to(self.device)
             input_ids = torch.index_select(batch.input_ids, 1, token_idx - 1)
+            logits = self.forward(
+                    input_ids,
+                    batch.attention_mask,
+                    batch.position_ids,
+                    token_idx,
+                    batch.past_key_values,
+                    bypass_hpu_graph=prefill and self.limit_hpu_graph if self.enable_hpu_graph else None,
+                )
             if self.model.config.model_type in ["gpt_bigcode"]:
-                batch.logits, batch.past = self.forward(
-                    input_ids,
-                    batch.attention_mask,
-                    batch.position_ids,
-                    token_idx,
-                    batch.past_key_values,
-                    bypass_hpu_graph=prefill and self.limit_hpu_graph if self.enable_hpu_graph else None,
-                )
+                batch.logits, batch.past = logits
             else:
-                batch.logits = self.forward(
-                    input_ids,
-                    batch.attention_mask,
-                    batch.position_ids,
-                    token_idx,
-                    batch.past_key_values,
-                    bypass_hpu_graph=prefill and self.limit_hpu_graph if self.enable_hpu_graph else None,
-                )
+                batch.logits = logits
 
         htorch.core.mark_step()
 
