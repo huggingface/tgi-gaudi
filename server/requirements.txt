@@ -47,7 +47,7 @@ opentelemetry-proto==1.15.0 ; python_version >= "3.9" and python_version < "3.13
 opentelemetry-sdk==1.15.0 ; python_version >= "3.9" and python_version < "3.13"
 opentelemetry-semantic-conventions==0.36b0 ; python_version >= "3.9" and python_version < "3.13"
 #optimum-habana==1.13.2 ; python_version >= "3.9" and python_version < "3.13"
-optimum-habana @ https://github.com/huggingface/optimum-habana/archive/refs/tags/ci_07102024.zip
+optimum-habana @ https://github.com/huggingface/optimum-habana/archive/refs/tags/ci_11102024.zip
 optimum==1.23.0 ; python_version >= "3.9" and python_version < "3.13"
 packaging==24.1 ; python_version >= "3.9" and python_version < "3.13"
 pandas==2.2.3 ; python_version >= "3.9" and python_version < "3.13"
