@@ -1,4 +1,5 @@
-import torch
+from io import BytesIO
+from PIL import Image
 import torch
 import time
 
@@ -21,11 +22,6 @@ from text_generation_server.models.types import (
 )
 from text_generation_server.pb import generate_pb2
 from text_generation_server.utils import NextTokenChooser, StoppingCriteria, Sampling
-from text_generation_server.models.vlm_causal_lm import split
-
-import re
-
-IMAGES = re.compile(r"!\[[^\]]*\]\((.*?)\s*(\"(?:.*[^\"])\")?\s*\)")
 
 
 tracer = trace.get_tracer(__name__)
@@ -109,7 +105,7 @@ class IdeficsCausalLMBatch(Batch):
         max_decode_tokens = 0
         for i, r in enumerate(pb.requests):
             requests_idx_mapping[r.id] = i
-            inputs.append(r.inputs)
+            inputs.append(r.input_chunks.chunks)
             next_token_choosers.append(
                 NextTokenChooser.from_pb(r.parameters, device, tokenizer)
             )
@@ -128,8 +124,15 @@ class IdeficsCausalLMBatch(Batch):
         for inp in inputs:
             # Each input is encoded into a list, where each element of this input list is either a string or a URL
             prompt = []
-            for chunk in split(inp):
-                prompt.append(chunk["content"])
+            for chunk in inp:
+                chunk_type = chunk.WhichOneof("chunk")
+                if chunk_type == "text":
+                    prompt.append(chunk.text)
+                elif chunk_type == "image":
+                    image = Image.open(BytesIO(chunk.image.data))
+                    prompt.append(image)
+                else:
+                    raise RuntimeError(f"Invalid chunk type {chunk_type}")
             prompts.append(prompt)
 
         # The processor replaces the call to tokenizer, and
@@ -286,7 +289,7 @@ class IdeficsCausalLMBatch(Batch):
             image_hidden_states = self.image_hidden_states[keep_indices]
 
         # Ensure that past_key_values tensors can be updated in-place
-        if type(self.past_key_values[0]) == tuple:
+        if type(self.past_key_values[0]) is tuple:
             self.past_key_values = [list(layer) for layer in self.past_key_values]
 
         # Update tensors in-place to allow incremental garbage collection
@@ -453,7 +456,7 @@ class IdeficsCausalLMBatch(Batch):
             # BLOOM Keys:   [batch_size * num_heads, head_dim, seq_length]
             # BLOOM Values: [batch_size * num_heads, seq_length, head_dim]
             # And ensure that we can update tensors in-place
-            if type(batch.past_key_values[0]) == tuple:
+            if isinstance(batch.past_key_values[0], tuple):
                 batch.past_key_values = [
                     [t.view(len(batch), -1, *t.shape[-2:]) for t in layer]
                     for layer in batch.past_key_values
@@ -577,6 +580,7 @@ class IdeficsCausalLM(Model):
         dtype: Optional[torch.dtype] = None,
         trust_remote_code: bool = False,
     ):
+        self.quantize = quantize
         from text_generation_server.models.custom_modeling.idefics_modeling import (
             IdeficsForVisionText2Text,
         )
@@ -631,6 +635,7 @@ class IdeficsCausalLM(Model):
                 tokenizer.add_special_tokens({"pad_token": "<unk>"})
 
         super(IdeficsCausalLM, self).__init__(
+            model_id=model_id,
             model=model,
             tokenizer=tokenizer,
             requires_padding=True,
