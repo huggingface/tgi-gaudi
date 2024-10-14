@@ -529,6 +529,9 @@ class VlmCausalLM(Model):
         dtype = torch.bfloat16 if dtype is None else dtype
         device = torch.device("hpu")
 
+        if hq_env.is_quantization_enabled:
+            htorch.core.hpu_set_env()
+
         if world_size > 1:
             model = self.get_deepspeed_model(
                 model_class, model_id, dtype, revision
