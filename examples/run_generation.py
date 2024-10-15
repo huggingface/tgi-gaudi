@@ -56,7 +56,7 @@ def read_dataset(
     )
     if len(dataset) > total_sample_count:
         dataset = dataset.select(range(total_sample_count))
-    dataset = dataset.shuffle()
+    dataset = dataset.shuffle(seed=seed)
     return [sample["prompt"] for sample in dataset]
 
 
