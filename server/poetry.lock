@@ -1834,13 +1834,13 @@ tests = ["Pillow", "accelerate", "diffusers (>=0.17.0)", "einops", "invisible-wa
 
 [[package]]
 name = "optimum-habana"
-version = "1.14.0"
+version = "1.14.1"
 description = "Optimum Habana is the interface between the Hugging Face Transformers and Diffusers libraries and Habana's Gaudi processor (HPU). It provides a set of tools enabling easy model loading, training and inference on single- and multi-HPU settings for different downstream tasks."
 optional = false
 python-versions = "*"
 files = [
-    {file = "optimum_habana-1.14.0-py3-none-any.whl", hash = "sha256:9b94ea8a14ef85c21f68b350295d29d28015a48712f9b0691ff589b112b92c1f"},
-    {file = "optimum_habana-1.14.0.tar.gz", hash = "sha256:8ede74eed1b803af9bc9d3518630ef252f21cb414e7cb451614d68328f186795"},
+    {file = "optimum_habana-1.14.1-py3-none-any.whl", hash = "sha256:557dd06a5fa2597b1487384a354c3a1618390c35e6b088f5d7a80c0611fe2bfd"},
+    {file = "optimum_habana-1.14.1.tar.gz", hash = "sha256:627626860b82452b75f73087df3e14004278ed30dacf767c100f1324675c8120"},
 ]
 
 [package.dependencies]
