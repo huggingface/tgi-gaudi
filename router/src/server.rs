@@ -1018,8 +1018,10 @@ async fn chat_completions(
         ..
     } = req;
 
+    println!("**********max_tokens: {:?}", max_tokens);
+
     let repetition_penalty = presence_penalty.map(|x| x + 2.0);
-    let max_new_tokens = max_tokens.or(Some(100));
+    //let max_new_tokens = max_tokens.or(Some(1000));
     let logprobs = logprobs.unwrap_or(false);
     let tool_prompt = tool_prompt.unwrap_or_default();
     let stop = stop.unwrap_or_default();
@@ -1081,7 +1083,7 @@ async fn chat_completions(
             top_p: req.top_p,
             typical_p: None,
             do_sample,
-            max_new_tokens,
+            max_new_tokens: max_tokens,
             return_full_text: None,
             stop,
             truncate: None,
