@@ -147,14 +147,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tracing::info!("Downloading tokenizer");
 
             // Parse Huggingface hub token
-            //let auth_token = std::env::var("HUGGING_FACE_HUB_TOKEN").ok();
-            let token = std::env::var("HUGGING_FACE_HUB_TOKEN").ok();
+            let auth_token = std::env::var("HUGGING_FACE_HUB_TOKEN").ok();
 
             // Download and instantiate tokenizer
             // We need to download it outside of the Tokio runtime
             let params = FromPretrainedParameters {
                 revision,
-                token,//auth_token,
+                token: auth_token,
                 ..Default::default()
             };
             Tokenizer::from_pretrained(tokenizer_name.clone(), Some(params)).unwrap()

@@ -33,7 +33,6 @@ use futures::TryStreamExt;
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use serde_json::Value;
 use std::convert::Infallible;
-use std::cmp;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -609,13 +608,6 @@ async fn completions(
         ..
     } = req;
 
-    /*let server_max_out_tokens = info.max_total_tokens - info.max_input_length;
-    let max_new_tokens = Some(
-        max_tokens.map_or(
-            server_max_out_tokens,
-            |max_tokens| cmp::min(server_max_out_tokens, max_tokens as usize),
-        ) as u32,
-    );*/
     let stop = stop.unwrap_or_default();
     // enable greedy only when temperature is 0
     let (do_sample, temperature) = match temperature {
@@ -1026,13 +1018,6 @@ async fn chat_completions(
     } = req;
 
     let repetition_penalty = presence_penalty.map(|x| x + 2.0);
-    /*let server_max_out_tokens = info.max_total_tokens - info.max_input_length;
-    let max_new_tokens = Some(
-        max_tokens.map_or(
-            server_max_out_tokens,
-            |max_tokens| cmp::min(server_max_out_tokens, max_tokens as usize),
-        ) as u32,
-    );*/
     let logprobs = logprobs.unwrap_or(false);
     let tool_prompt = tool_prompt.unwrap_or_default();
     let stop = stop.unwrap_or_default();
