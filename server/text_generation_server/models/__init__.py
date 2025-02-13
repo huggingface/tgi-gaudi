@@ -1,5 +1,6 @@
 import torch
 import os
+import enum
 
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
@@ -16,7 +17,7 @@ from text_generation_server.models.model import Model
 from text_generation_server.models.causal_lm import CausalLM
 from text_generation_server.models.bloom import BLOOM
 from text_generation_server.models.starcoder import StarCoder
-from text_generation_server.models.vlm_causal_lm import VlmCausalLM
+from text_generation_server.models.static_vlm_causal_lm import StaticVlmCausalLM
 from text_generation_server.models.mllama_causal_lm import MllamaCausalLM
 from text_generation_server.models.custom_modeling.llava_next import (
     LlavaNextForConditionalGeneration,
@@ -200,7 +201,7 @@ def get_model(
         )
 
     if model_type == "llava_next":
-        return VlmCausalLM(
+        return StaticVlmCausalLM(
             model_class=LlavaNextForConditionalGeneration,
             model_id=model_id,
             revision=revision,

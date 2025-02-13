@@ -29,6 +29,14 @@ elif SYSTEM == "ipex":
         PREFILL_IN_KV_CACHE,
         SUPPORTS_WINDOWING,
     )
+elif SYSTEM == "hpu":
+    from .hpu import (
+        attention,
+        paged_attention,
+        reshape_and_cache,
+        PREFILL_IN_KV_CACHE,
+        SUPPORTS_WINDOWING,
+    )
 else:
     raise ImportError(f"System {SYSTEM} doesn't support flash/paged attention")
 

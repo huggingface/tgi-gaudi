@@ -38,12 +38,22 @@ def get_cpu_free_memory(device, memory_fraction):
     free_memory = int(mem.available * 0.95 / WORLD_SIZE)
     return free_memory
 
+def get_hpu_free_memory(device, memory_fraction):
+    from habana_frameworks.torch.hpu import memory_stats
+    device_id = device.index
+    mem_stats = memory_stats(device_id)
+    logger.info(f"mem_stats: {mem_stats}") 
+    free_memory = mem_stats["Limit "] - mem_stats["InUser"]
+    return free_memory
+
 
 def noop(*args, **kwargs):
+    logger.info(f"""noop called with args: {args} and kwargs: {kwargs}""")
     pass
 
 
 SYSTEM = None
+logger.info(f"hpu_is_available: {torch.hpu.is_available()}")
 if torch.version.hip is not None:
     SYSTEM = "rocm"
     empty_cache = torch.cuda.empty_cache
@@ -66,6 +76,12 @@ elif is_ipex_available():
         empty_cache = noop
         synchronize = noop
         get_free_memory = get_cpu_free_memory
+elif hasattr(torch, "hpu") and torch.hpu.is_available():
+    SYSTEM = "hpu"
+    empty_cache = noop
+    synchronize = torch.hpu.synchronize
+    get_free_memory = get_hpu_free_memory
+
 else:
     SYSTEM = "cpu"
 

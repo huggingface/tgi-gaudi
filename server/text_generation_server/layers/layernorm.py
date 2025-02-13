@@ -97,6 +97,16 @@ elif SYSTEM == "ipex":
             )
             return out, residual if residual is not None else hidden_states
 
+elif SYSTEM == "hpu":
+    
+    class FastLayerNorm(nn.LayerNorm):
+        def forward(self, hidden_states, residual=None):
+            if residual is not None:
+                hidden_states += residual
+            residual = hidden_states
+
+            return super().forward(hidden_states), residual
+               
 
 class FastRMSNorm(nn.Module):
     def __init__(self, weight: torch.Tensor, eps: float):
@@ -111,7 +121,18 @@ class FastRMSNorm(nn.Module):
         return cls(weight, eps)
 
     def forward(self, hidden_states, residual=None):
-        if SYSTEM == "ipex":
+        if SYSTEM == "hpu":
+            from habana_frameworks.torch.hpex.normalization import FusedRMSNorm
+            # mixed dtypes are not good for FusedRMSNorm, both inputs need to have same dtype
+            if hidden_states.dtype != self.weight.dtype:
+                orig_dtype = hidden_states.dtype
+                out = FusedRMSNorm.apply(hidden_states.to(self.weight.dtype), self.weight, self.variance_epsilon)
+                return out.to(orig_dtype), residual if residual is not None else hidden_states
+            else:
+                out = FusedRMSNorm.apply(hidden_states, self.weight, self.variance_epsilon)
+                return out, residual if residual is not None else hidden_states
+
+        elif SYSTEM == "ipex":
             out = ipex.llm.functional.add_rms_norm(
                 residual,
                 hidden_states,
