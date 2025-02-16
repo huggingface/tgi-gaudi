@@ -914,6 +914,14 @@ class VlmCausalLM(Model):
                 # Update attention_mask as we added a new token to input_ids
                 batch.attention_mask.index_fill_(1, token_idx, 1)
 
+                # add cross-attn mask for new token
+                if batch.cross_attention_mask is not None:
+                    cross_attention_mask_prev = batch.cross_attention_mask
+                    if token_idx is not None:
+                        mask = cross_attention_mask_prev[:, token_idx - 2 : token_idx - 1, ...]
+                        cross_attention_mask_prev.index_copy_(1, token_idx - 1, mask)
+                        batch.cross_attention_mask = cross_attention_mask_prev
+
                 # Adjust lengths
                 batch.input_length += 1
 
