@@ -806,24 +806,25 @@ class VlmCausalLM(Model):
 
     def forward(
         self,
-        input_ids,
-        attention_mask,
-        position_ids,
+        batch: VlmCausalLMBatch,
         token_idx,
-        past_key_values: Optional[List[Tuple]] = None,
-        pixel_values: Optional[List[torch.Tensor]] = None,
-        image_sizes: Optional[List[Tuple[int, int]]] = None,
         bypass_hpu_graph: Optional[bool] = None,
     ) -> Tuple[torch.Tensor, List[Tuple[torch.Tensor, torch.Tensor]]]:
         # Model Forward
         kwargs = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "past_key_values": past_key_values,
+            "input_ids": batch.input_ids,
+            "attention_mask": batch.attention_mask,
+            "past_key_values": batch.past_key_values,
             "token_idx": token_idx,
-            "pixel_values": pixel_values,
-            "image_sizes": image_sizes,
+            "pixel_values": batch.pixel_values,
         }
+
+        if self.model.config.model_type == "mllama":
+            kwargs["aspect_ratio_ids"] = batch.aspect_ratio_ids
+            kwargs["aspect_ratio_mask"] = batch.aspect_ratio_mask
+            kwargs["cross_attention_mask"] = batch.cross_attention_mask
+        else:
+            kwargs["image_sizes"] = batch.image_sizes
 
         hpu_kwargs = {}
         # Optimum Habana got "lazy_mode" key-val only supported for llama type of models
@@ -831,14 +832,14 @@ class VlmCausalLM(Model):
             hpu_kwargs["lazy_mode"] = LAZY_MODE == 1
 
         if self.has_position_ids:
-            kwargs["position_ids"] = position_ids
+            kwargs["position_ids"] = batch.position_ids
 
         if bypass_hpu_graph != None:
             hpu_kwargs["bypass_hpu_graphs"] = bypass_hpu_graph
 
         kwargs.update(self.kwargs)
         model_inputs = self.model.prepare_inputs_for_generation(**kwargs)
-        if past_key_values is not None:
+        if batch.past_key_values is not None:
             return self.model.forward(**model_inputs, **hpu_kwargs)
         else:
             outputs = self.model.forward(**model_inputs, **hpu_kwargs)
@@ -952,13 +953,8 @@ class VlmCausalLM(Model):
             # no right padding for prefill
             token_idx = torch.tensor(batch.attention_mask.shape[-1] - 1).to(self.device)
             batch.logits, batch.past = self.forward(
-                batch.input_ids,
-                batch.attention_mask,
-                batch.position_ids,
+                batch,
                 token_idx,
-                batch.past_key_values,
-                batch.pixel_values,
-                batch.image_sizes,
                 bypass_hpu_graph=prefill and self.limit_hpu_graph if self.enable_hpu_graph else None,
             )
         elif all([req.stopping_criteria.max_new_tokens == 1 for req in batch.requests]):
@@ -968,11 +964,8 @@ class VlmCausalLM(Model):
         else:
             token_idx = torch.tensor(batch.attention_mask.shape[-1] - batch.right_padding).to(self.device)
             batch.logits = self.forward(
-                batch.input_ids,
-                batch.attention_mask,
-                batch.position_ids,
+                batch,
                 token_idx,
-                batch.past_key_values,
                 bypass_hpu_graph=prefill and self.limit_hpu_graph if self.enable_hpu_graph else None,
             )
 
