@@ -848,7 +848,7 @@ class VlmCausalLM(Model):
     @tracer.start_as_current_span("generate_token")
     def generate_token(
         self, batches: List[VlmCausalLMBatch], is_warmup: bool = False
-    ) -> Tuple[List[Generation], Optional[CausalLMBatch], Tuple[int, int]]:
+    ) -> Tuple[List[Generation], Optional[VlmCausalLMBatch], Tuple[int, int]]:
         start = time.time_ns()
         # Results
         generations: List[Generation] = []
