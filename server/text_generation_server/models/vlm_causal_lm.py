@@ -186,6 +186,48 @@ class VlmCausalLMBatch(CausalLMBatch):
     pixel_values: Optional[List[torch.Tensor]]
     pixel_attention_mask: Optional[List[torch.Tensor]]
     image_sizes: Optional[List[Tuple[int, int]]]
+    aspect_ratio_ids: Optional[torch.Tensor] = None
+    aspect_ratio_mask: Optional[torch.Tensor] = None
+    cross_attention_mask: Optional[torch.Tensor] = None
+
+    def __init__(self,
+        batch_id,
+        requests,
+        input_ids,
+        attention_mask,
+        position_ids,
+        past_key_values,
+        merged_kv_cache,
+        next_token_chooser,
+        top_n_tokens,
+        top_n_tokens_tensor,
+        input_length,
+        pixel_values: Optional[List[torch.Tensor]] = None,
+        pixel_attention_mask: Optional[List[torch.Tensor]] = None,
+        image_sizes: Optional[List[Tuple[int, int]]] = None,
+        aspect_ratio_ids: Optional[torch.Tensor] = None,
+        aspect_ratio_mask: Optional[torch.Tensor] = None,
+        cross_attention_mask: Optional[torch.Tensor] = None,
+        ):
+        super().__init__(
+            batch_id = batch_id,
+            requests = requests,
+            input_ids = input_ids,
+            attention_mask = attention_mask,
+            position_ids = position_ids,
+            past_key_values = past_key_values,
+            merged_kv_cache = merged_kv_cache,
+            next_token_chooser = next_token_chooser,
+            top_n_tokens = top_n_tokens,
+            top_n_tokens_tensor = top_n_tokens_tensor,
+            input_length = input_length)
+
+        self.pixel_values = pixel_values
+        self.pixel_attention_mask = pixel_attention_mask
+        self.image_sizes = image_sizes
+        self.aspect_ratio_ids = aspect_ratio_ids
+        self.aspect_ratio_mask = aspect_ratio_mask
+        self.cross_attention_mask = cross_attention_mask
 
     @classmethod
     def from_tokenized(
@@ -379,10 +421,26 @@ class VlmCausalLMBatch(CausalLMBatch):
                 batch.image_sizes = image_inputs["image_sizes"].to(device=device)
             else:
                 batch.image_sizes = None
+            if "aspect_ratio_ids" in image_inputs:
+                batch.aspect_ratio_ids = image_inputs["aspect_ratio_ids"].to(device=device)
+            else:
+                batch.aspect_ratio_ids = None
+            if "aspect_ratio_mask" in image_inputs:
+                batch.aspect_ratio_mask = image_inputs["aspect_ratio_mask"].to(device=device)
+            else:
+                batch.aspect_ratio_mask = None
+            if "cross_attention_mask" in image_inputs:
+                batch.cross_attention_mask = image_inputs["cross_attention_mask"].to(device=device)
+            else:
+                batch.cross_attention_mask = None
         else:
             batch.pixel_values = None
             batch.pixel_attention_mask = None
             batch.image_sizes = None
+            batch.aspect_ratio_ids = None
+            batch.aspect_ratio_mask = None
+            batch.cross_attention_mask = None
+
         return batch
 
     @classmethod
@@ -476,6 +534,12 @@ class VlmCausalLMBatch(CausalLMBatch):
         attention_mask = batches[dst_batch_idx].attention_mask
         position_ids = batches[dst_batch_idx].position_ids
         past_key_values = batches[dst_batch_idx].past_key_values
+        pixel_values = None
+        pixel_attention_mask = None
+        image_sizes = None
+        aspect_ratio_ids = None
+        aspect_ratio_mask = None
+        cross_attention_mask = batches[dst_batch_idx].cross_attention_mask
         input_length = max_input_length
 
         htorch.core.mark_step()
@@ -492,6 +556,12 @@ class VlmCausalLMBatch(CausalLMBatch):
             top_n_tokens=top_n_tokens,
             top_n_tokens_tensor=top_n_tokens_tensor,
             input_length=input_length,
+            pixel_values=pixel_values,
+            pixel_attention_mask=pixel_attention_mask,
+            image_sizes=image_sizes,
+            aspect_ratio_ids=aspect_ratio_ids,
+            aspect_ratio_mask=aspect_ratio_mask,
+            cross_attention_mask=cross_attention_mask,
         )
 
 class VlmCausalLM(Model):
