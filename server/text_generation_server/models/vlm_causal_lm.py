@@ -106,24 +106,18 @@ def split(string) -> List[Dict[str, str]]:
 
     return parts
 
-def image_text_replacement(processor, image_input, config, image_id: int) -> str:
+def image_text_replacement(config) -> str:
     if config.model_type == "idefics2":
-        image_seq_len = 64
         image_str = f"{IDEFICS2_FAKE_TOKEN}{IDEFICS2_IMAGE_TOKEN * image_seq_len}{IDEFICS2_FAKE_TOKEN}"
-        if processor.image_processor.do_image_splitting:
-            image_str *= 5
         return image_str
     elif config.model_type == "llava_next":
-        height, width = image_input["image_sizes"][image_id]
-        num_features = get_number_of_features(height, width, config)
-        from loguru import logger
-        return "<image>" * num_features
-
+        return "<image>"
     elif config.model_type == "paligemma":
-        return "<image>" * config.text_config.num_image_tokens
+        return "<image>"
+    elif config.model_type == "mllama":
+        return "<|image|>"
     else:
         raise RuntimeError(f"Unknown config {config.model_type} for multimodal")
-
 
 def image_text_replacement_fixup(config, text: str) -> str:
     if config.model_type == "idefics2":
@@ -284,51 +278,40 @@ class VlmCausalLMBatch(CausalLMBatch):
             input_length=input_len,
         )
 
-
     @classmethod
     def batch_tokenized_inputs(
         cls, requests: Iterable[generate_pb2.Request], tokenizer, processor, config, is_warmup
     ):
-        # Process images first. We need all of them so that the processor
-        # can make the image splits the same size. And we need the final
-        # sizes to insert correct number of image tokens.
+        image_inputs = {}
+        texts = []
         images = []
-        for r in requests:
+        image_indices = []
+        batch_tokenized_inputs = {}
+
+        for i, r in enumerate(requests):
+            # Each input is encoded into a list, where each element of this input list is either a string or a URL
+            curr_text = ""
+            curr_image = None
+            curr_i = None
             for chunk in r.input_chunks.chunks:
                 chunk_type = chunk.WhichOneof("chunk")
                 if chunk_type == "text":
-                    pass
+                    curr_text += chunk.text
                 elif chunk_type == "image":
                     image = Image.open(BytesIO(chunk.image.data))
-                    if config.model_type == "llava_next":
-                        images.append(image)
-                    else:
-                        images.append([image])
+                    # TODO unsure about BOS
+                    curr_text += image_text_replacement(config)
+                    #image_input = processor.image_processor(image, return_tensors="pt")
+                    curr_image = image
+                    curr_i = i
+                    # image_inputs.append(image_input)
+                    # image_indices.append(i)
                 else:
                     raise RuntimeError(f"Invalid chunk type {chunk_type}")
-
-        image_inputs = None
-        if images:
-            image_inputs = processor.image_processor(images, return_tensors="pt")
-
-        batch_inputs = []
-        max_truncation = 0
-        image_id = 0
-        for r in requests:
-            full_text = ""
-            for chunk in r.input_chunks.chunks:
-                chunk_type = chunk.WhichOneof("chunk")
-                if chunk_type == "text":
-                    full_text += chunk.text
-                elif chunk_type == "image":
-                    full_text += image_text_replacement(
-                        processor, image_inputs, config, image_id
-                    )
-                    image_id += 1
-            full_text = image_text_replacement_fixup(config, full_text)
-
-            batch_inputs.append(full_text)
-            max_truncation = max(max_truncation, r.truncate)
+            texts.append(curr_text)
+            if curr_image is not None:
+                images.append(curr_image)
+                image_indices.append(curr_i)
 
         missing_inputs = 0
         dummy_images = None
@@ -337,45 +320,35 @@ class VlmCausalLMBatch(CausalLMBatch):
             missing_inputs = new_bs - len(requests)
             if missing_inputs > 0:
                 dummy_inputs = []
-                if len(batch_inputs) > 0:
-                    dummy_inputs = [batch_inputs[0]] * missing_inputs
+                if len(texts) > 0:
+                    dummy_inputs = [texts[0]] * missing_inputs
+                    dummy_images = [images[0]] * missing_inputs
+                texts += dummy_inputs
+                images += dummy_images
 
-                batch_inputs += dummy_inputs
-
-        batch_tokenized_inputs = tokenizer(
-            batch_inputs,
-            truncation=True,
-            max_length=max_truncation,
-            add_special_tokens=not config.model_type == "paligemma",
-            return_tensors="pt",
-            padding="longest",
-            return_token_type_ids=False,
-        )
-
-        if missing_inputs > 0 and image_inputs is not None:
-            dummy_shape = list(image_inputs['pixel_values'].shape)
-            dummy_shape[0] = missing_inputs
-            dummy_images = torch.rand(dummy_shape)
-            new_image_inputs = {
-                "pixel_values": torch.cat(
-                    (image_inputs['pixel_values'], dummy_images), dim=0
-                ),
-            }
-            if "pixel_attention_mask" in image_inputs:
-                dummy_shape = list(image_inputs['pixel_attention_mask'].shape)
-                dummy_shape[0] = missing_inputs
-                dummy_attention = torch.zeros(dummy_shape)
-                new_image_inputs["pixel_attention_mask"] = torch.cat(
-                    (image_inputs["pixel_attention_mask"], dummy_attention), dim=0
-                )
-            if "image_sizes" in image_inputs:
-                dummy_shape = list(list(image_inputs['image_sizes'])[0])
-                dummy_shape = missing_inputs*[dummy_shape]
-                dummy_sizes = torch.IntTensor(dummy_shape)
-                new_image_inputs["image_sizes"] = torch.cat(
-                    (image_inputs["image_sizes"], dummy_sizes), dim=0
-                )
-            image_inputs = new_image_inputs
+        processor_output = processor(images,
+                                     texts,
+                                     truncation=True,
+                                     max_length=r.truncate,
+                                     add_special_tokens=r.add_special_tokens,
+                                     return_tensors="pt",
+                                     padding="longest")
+        if "input_ids" in processor_output:
+            batch_tokenized_inputs.update({"input_ids" : processor_output["input_ids"]})
+        if "attention_mask" in processor_output:
+            batch_tokenized_inputs.update({"attention_mask" : processor_output["attention_mask"]})
+        if "pixel_values" in processor_output:
+            image_inputs.update({"pixel_values" : processor_output["pixel_values"]})
+        if "pixel_attention_mask" in processor_output:
+            image_inputs.update({"pixel_attention_mask" : processor_output["pixel_attention_mask"]})
+        if "aspect_ratio_ids" in processor_output:
+            image_inputs.update({"aspect_ratio_ids" : processor_output["aspect_ratio_ids"]})
+        if "aspect_ratio_mask" in processor_output:
+            image_inputs.update({"aspect_ratio_mask" : processor_output["aspect_ratio_mask"]})
+        if "cross_attention_mask" in processor_output:
+            image_inputs.update({"cross_attention_mask" : processor_output["cross_attention_mask"]})
+        if "image_sizes" in processor_output:
+            image_inputs.update({"image_sizes" : processor_output["image_sizes"]})
 
         return batch_tokenized_inputs, image_inputs
 
