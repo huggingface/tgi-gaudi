@@ -977,6 +977,13 @@ class VlmCausalLM(Model):
                 bypass_hpu_graph=prefill and self.limit_hpu_graph if self.enable_hpu_graph else None,
             )
 
+        if batch.pixel_values is not None:
+            batch.pixel_values = None
+        if batch.aspect_ratio_ids is not None:
+            batch.aspect_ratio_ids = None
+        if batch.aspect_ratio_mask is not None:
+            batch.aspect_ratio_mask = None
+
         htorch.core.mark_step()
 
         start_decode = time.time_ns()
