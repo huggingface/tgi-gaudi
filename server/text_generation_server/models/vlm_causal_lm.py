@@ -937,7 +937,7 @@ class VlmCausalLM(Model):
 
         # Check if we need to do any bookkeeping first
         if not prefill:
-            batch = batch.__class__.recombine([batch], self.tokenizer.pad_token_id, is_warmup)
+            batch = self.batch_type.recombine([batch], self.tokenizer.pad_token_id, is_warmup)
 
         scenario = 'PREFILL' if prefill else 'GENERATE'
         if self.enable_hpu_graph and self.limit_hpu_graph and round_up(DECODE_WARMUP_BATCH_SIZE_LIST, batch.batch_size) != self.prev_bs:
@@ -1134,7 +1134,7 @@ class VlmCausalLM(Model):
         return generations, batch if not stopped else None, (forward_ns, decode_ns)
 
     def batch_from_pb(self, batch, is_warmup):
-        return VlmCausalLMBatch.from_pb_processor(
+        return self.batch_type.from_pb_processor(
             batch,
             self.tokenizer,
             self.processor,
