@@ -59,7 +59,7 @@ class MllamaForConditionalGeneration(GaudiMllamaForConditionalGeneration):
             - add use_flash_attention and flash_attention_recompute
         """
         full_text_row_masked_out_mask = kwargs.get("full_text_row_masked_out_mask", None)
-
+        logger.info(f"forward++++++++++++++++++++++++")
         if (input_ids is None) ^ (inputs_embeds is not None):
             raise ValueError(
                 "You cannot specify both input_ids and inputs_embeds at the same time, and must specify either one"
@@ -87,11 +87,24 @@ class MllamaForConditionalGeneration(GaudiMllamaForConditionalGeneration):
         )
         
         logits = outputs[0]
-
+        logger.info(f"retrun_dict: {return_dict}")
         if not return_dict:
+            logger.info(f"type(outputs)={type(outputs)}")
+            logger.info(f"outputs.logits.shape={logits.shape}")
             output = (logits,) + outputs[1:]
             return output
 
+        logger.info(f"type(outputs)={type(outputs)}")
+        logger.info(f"outputs.logits.shape={outputs.logits.shape}")
+        logger.info(f"outputs.past_key_values[0][0].shape={outputs.past_key_values[0][0].shape}")
+        logger.info(f"outputs.past_key_values[0][1].shape={outputs.past_key_values[0][1].shape}")
+        logger.info(f"outputs.past_key_values[1][0].shape={outputs.past_key_values[1][0].shape}")
+        logger.info(f"outputs.past_key_values[1][1].shape={outputs.past_key_values[1][1].shape}")
+        logger.info(f"outputs.past_key_values[3][0].shape={outputs.past_key_values[3][0].shape}")
+        logger.info(f"outputs.past_key_values[3][1].shape={outputs.past_key_values[3][1].shape}")
+        logger.info(f"len(outputs.past_key_values)={len(outputs.past_key_values)}")
+        logger.info(f"len(outputs.past_key_values)={len(outputs.past_key_values[0])}")
+        logger.info(f"forward-----------------")
         return outputs
     
     def prepare_inputs_for_generation(
@@ -126,7 +139,7 @@ class MllamaForConditionalGeneration(GaudiMllamaForConditionalGeneration):
         logger.info(f"aspect_ratio_ids: {aspect_ratio_ids.shape if aspect_ratio_ids is not None else None}")
         logger.info(f"aspect_ratio_mask: {aspect_ratio_mask.shape if aspect_ratio_mask is not None else None}")
         logger.info(f"cross_attention_mask: {cross_attention_mask.shape if cross_attention_mask is not None else None}")
-        logger.info(f"cross_attention_mask: {cross_attention_mask}")      
+        #logger.info(f"past_key_values: {past_key_values}")
         #import pdb; pdb.set_trace()
         #breakpoint()
         
@@ -165,6 +178,40 @@ class MllamaForConditionalGeneration(GaudiMllamaForConditionalGeneration):
                 output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
             )
             return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+            bucket_internal = kwargs.get("bucket_internal", None)
+            
+            if past_key_values is not None:
+                if token_idx is not None:
+                    input_ids = torch.index_select(input_ids, 1, token_idx - 1)
+                elif inputs_embeds is not None:  # Exception 1
+                    input_ids = input_ids[:, -cache_position.shape[0] :]
+                elif input_ids.shape[1] != cache_position.shape[0]:  # Default case (the "else", a no op, is Exception 2)
+                    input_ids = input_ids[:, cache_position]
+            elif bucket_internal and token_idx is not None:
+                # for the 1st token we can slice the inputs till token idx for the fwd pass.
+                print(f"1111111111111111")
+                input_ids = input_ids[:, :token_idx]
+                attention_mask = attention_mask[:, :token_idx]
+                if cross_attention_mask is not None:
+                    cross_attention_mask = cross_attention_mask[:, :token_idx, ...]
+
+            # TODO: we have no attention_mask so this won't work, check if we really won't need attention mask and find another way
+            if attention_mask is not None and position_ids is None:
+                # create position_ids on the fly for batch generation
+                position_ids = attention_mask.long().cumsum(-1) - 1
+                position_ids.masked_fill_(attention_mask == 0, 1)
+                if past_key_values:
+                    if token_idx is not None:
+                        position_ids = torch.index_select(position_ids, 1, token_idx - 1)
+                    else:
+                        position_ids = position_ids[:, -input_ids.shape[1] :]
+
+                    # This `clone` call is needed to avoid recapturing cuda graphs with `torch.compile`'s  `mode="reduce-overhead`, as otherwise the input `position_ids` would have various stride during the decoding. Here, simply using `.contiguous()` is not sufficient as in the batch size = 1 case, `position_ids` is already contiguous but with varying stride which retriggers a capture.
+                    position_ids = position_ids.clone(memory_format=torch.contiguous_format)
+
+    
+            
+            
             if pixel_values is not None and inputs_embeds is not None:
                 raise ValueError(
                     "You cannot specify both pixel_values and inputs_embeds at the same time, and must specify either one"
@@ -215,49 +262,50 @@ class MllamaForConditionalGeneration(GaudiMllamaForConditionalGeneration):
                         cross_attention_mask = cross_attention_mask[:, :, -1:]
                         full_text_row_masked_out_mask = full_text_row_masked_out_mask[:, :, -1:]
 
-            if past_key_values is not None:
-                seq_len = input_ids.shape[1]
-                pad_len = seq_len - token_idx.item()
-                input_ids = torch.index_select(input_ids, 1, token_idx - 1)
-                # Retrieve the first layer to inspect the logits and mask out the hidden states
-                # that are set to 0
-                first_layer_past_key_value = past_key_values[0][0][:, :, :, 0]
+            # if past_key_values is not None:
+            #     logger.info(f"past_key_values is not None")
+            #     seq_len = input_ids.shape[1]
+            #     pad_len = seq_len - token_idx.item()
+            #     input_ids = torch.index_select(input_ids, 1, token_idx - 1)
+            #     # Retrieve the first layer to inspect the logits and mask out the hidden states
+            #     # that are set to 0
+            #     first_layer_past_key_value = past_key_values[0][0][:, :, :, 0]
 
-                # Sum all dimensions of head_dim (-2) to avoid random errors such as: https://github.com/huggingface/transformers/pull/28032#issuecomment-1863691941
-                batch_index, non_attended_tokens = torch.where(first_layer_past_key_value.float().sum(-2) == 0)
+            #     # Sum all dimensions of head_dim (-2) to avoid random errors such as: https://github.com/huggingface/transformers/pull/28032#issuecomment-1863691941
+            #     batch_index, non_attended_tokens = torch.where(first_layer_past_key_value.float().sum(-2) == 0)
 
-                # Get the target length
-                past_length = first_layer_past_key_value.shape[-1]
-                extended_attention_mask = torch.ones(
-                    (attention_mask.shape[0], past_length),
-                    dtype=attention_mask.dtype,
-                    device=attention_mask.device,
-                )
-                # Filter out only the tokens that can be un-attended, this can happen
-                # if one uses Llava + Fused modules where the cache on the
-                # first iteration is already big enough, or if one passes custom cache
-                valid_indices = non_attended_tokens < extended_attention_mask.size(-1)
-                new_batch_index = batch_index[valid_indices]
-                new_non_attended_tokens = non_attended_tokens[valid_indices]
+            #     # Get the target length
+            #     past_length = first_layer_past_key_value.shape[-1]
+            #     extended_attention_mask = torch.ones(
+            #         (attention_mask.shape[0], past_length),
+            #         dtype=attention_mask.dtype,
+            #         device=attention_mask.device,
+            #     )
+            #     # Filter out only the tokens that can be un-attended, this can happen
+            #     # if one uses Llava + Fused modules where the cache on the
+            #     # first iteration is already big enough, or if one passes custom cache
+            #     valid_indices = non_attended_tokens < extended_attention_mask.size(-1)
+            #     new_batch_index = batch_index[valid_indices]
+            #     new_non_attended_tokens = non_attended_tokens[valid_indices]
 
-                # Zero-out the places where we don't need to attend
-                extended_attention_mask[new_batch_index, new_non_attended_tokens] = 0
+            #     # Zero-out the places where we don't need to attend
+            #     extended_attention_mask[new_batch_index, new_non_attended_tokens] = 0
 
-                attention_mask = extended_attention_mask
-                attention_mask[:, -pad_len:] = 0
+            #     attention_mask = extended_attention_mask
+            #     attention_mask[:, -pad_len:] = 0
 
-            if attention_mask is not None and position_ids is None:
-                # create position_ids on the fly for batch generation
-                position_ids = attention_mask.long().cumsum(-1) - 1
-                position_ids.masked_fill_(attention_mask == 0, 1)
-                if past_key_values:
-                    if token_idx is not None:
-                        position_ids = torch.sum(attention_mask, dim=1).unsqueeze(-1) - 1
-                    else:
-                        position_ids = position_ids[:, -input_ids.shape[1] :]
+            # if attention_mask is not None and position_ids is None:
+            #     # create position_ids on the fly for batch generation
+            #     position_ids = attention_mask.long().cumsum(-1) - 1
+            #     position_ids.masked_fill_(attention_mask == 0, 1)
+            #     if past_key_values:
+            #         if token_idx is not None:
+            #             position_ids = torch.sum(attention_mask, dim=1).unsqueeze(-1) - 1
+            #         else:
+            #             position_ids = position_ids[:, -input_ids.shape[1] :]
                 
-                # This `clone` call is needed to avoid recapturing cuda graphs with `torch.compile`'s  `mode="reduce-overhead`, as otherwise the input `position_ids` would have various stride during the decoding. Here, simply using `.contiguous()` is not sufficient as in the batch size = 1 case, `position_ids` is already contiguous but with varying stride which retriggers a capture.
-                position_ids = position_ids.clone(memory_format=torch.contiguous_format)
+            #     # This `clone` call is needed to avoid recapturing cuda graphs with `torch.compile`'s  `mode="reduce-overhead`, as otherwise the input `position_ids` would have various stride during the decoding. Here, simply using `.contiguous()` is not sufficient as in the batch size = 1 case, `position_ids` is already contiguous but with varying stride which retriggers a capture.
+            #     position_ids = position_ids.clone(memory_format=torch.contiguous_format)
 
 
             # if `inputs_embeds` are passed, we only want to use them in the 1st generation step

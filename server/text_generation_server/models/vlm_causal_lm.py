@@ -253,8 +253,8 @@ class VlmCausalLMBatch(CausalLMBatch):
         self.attention_mask = torch.nn.functional.pad(
             self.attention_mask, (0, right_padding), value=0
         )
-        if self.position_ids is not None:
-            self.position_ids = torch.index_select(self.position_ids, 1, self.token_idx - 1) + 1
+        # if self.position_ids is not None:
+        #     self.position_ids = torch.index_select(self.position_ids, 1, self.token_idx - 1) + 1
         if self.cross_attention_mask is not None:
             self.cross_attention_mask = torch.nn.functional.pad(
                 self.cross_attention_mask, (0, 0, 0, 0, 0, right_padding), value=0
@@ -271,21 +271,23 @@ class VlmCausalLMBatch(CausalLMBatch):
                         self.past_key_values[layer_id][1], (0, 0, 0, right_padding), value=0
                     )
                 past_key_values_list[layer_id] = tuple(past_key_value_list)
-            self.past = tuple(past_key_values_list)
+            self.past_key_values = tuple(past_key_values_list)
         logger.info(f"padding_process attention_mask.shape={self.attention_mask.shape}")
         logger.info(f"padding_process position_ids.shape={self.position_ids.shape}") 
         logger.info(f"padding_process batch.input_length={self.input_length}") 
         logger.info(f"padding_process batch.right_padding={self.right_padding}")
         logger.info(f"padding_process batch.seq_length={self.seq_length}")
         logger.info(f"""padding_process batch.input_ids.shape={self.input_ids.shape}""") 
+        #for i in range(self.input_ids.shape[1]):
+        #    logger.info(f"padding_process i = {i} batch.input_ids[{i}]={self.input_ids[0][i]}")
         logger.info(f"padding_process top_n_tokens={self.top_n_tokens}")
         logger.info(f"padding_process top_n_tokens_tensor={self.top_n_tokens_tensor}")    
-        for layer_id in range(len(self.past)):
-            logger.info(f"padding_process key.shape={self.past[layer_id][0].shape}")
-            logger.info(f"padding_process value.shape={self.past[layer_id][1].shape}")
+        # for layer_id in range(len(self.past_key_values)):
+        #     logger.info(f"padding_process key.shape={self.past[layer_id][0].shape}")
+        #     logger.info(f"padding_process value.shape={self.past[layer_id][1].shape}")
    
         self.prefilling = False
-        self.input_length = self.input_length - 1  
+        self.input_length = self.input_length 
 
 
     @classmethod
@@ -338,6 +340,8 @@ class VlmCausalLMBatch(CausalLMBatch):
                 left_padding = bucket_size - input_len
 
         input_ids = tokenized_inputs["input_ids"]
+        logger.info(f"input_ids.shape={input_ids.shape}")
+        logger.info(f"input_ids={input_ids}")
         attention_mask = tokenized_inputs["attention_mask"]
         cross_attention_mask = tokenized_inputs.get("cross_attention_mask", None)
         # Allocate space for first token
@@ -345,6 +349,9 @@ class VlmCausalLMBatch(CausalLMBatch):
             input_ids = torch.nn.functional.pad(
                 input_ids, (left_padding, 1), value=tokenizer.pad_token_id
             )
+            logger.info(f"input_ids.shape={input_ids.shape}")
+            for i in range(3800,3840):
+                logger.info(f"input_ids[{i}]={input_ids[0][i]}")
             attention_mask = torch.nn.functional.pad(
                 attention_mask, (left_padding, 1), value=0
             )
@@ -514,367 +521,367 @@ class VlmCausalLMBatch(CausalLMBatch):
 
     @classmethod
     def recombine(cls, batches: List["VlmCausalLMBatch"], pad_token_id: int, is_warmup: bool =False) -> "VlmCausalLMBatch":
-        # if not all(b.past_key_values is not None for b in batches):
-        #     raise ValueError("KV cache not allocated! Cannot recombine before prefill!")
-        #     # Used for padding
-        
-        # total_requests = sum(len(b) for b in batches)
-        # new_bs = total_requests
-        # if not is_warmup:
-        #     new_bs = round_up(DECODE_WARMUP_BATCH_SIZE_LIST,total_requests)
-        # batch_padding = new_bs - total_requests
-            
-        # concat_needed = False
-        # only_padding_needed = False
-        # if len(batches) > 1:
-        #     concat_needed = True
-        # elif batches[0].prefilling:
-        #     logger.info(f"prefilling padding++++++++++++++")
-        #     only_padding_needed = True
-        #     batch = batches[0]
-        #     batch.padding_process(pad_token_id)
-        #     return batch
-        # else:
-        #     logger.info(f"do nothing prefilling batch+++++++++++")
-        #     return batches[0]
-
-        # if only_padding_needed:
-        #     batch = batches[0]
-        #     batch.padding_process(pad_token_id)
-        #     # batch.input_ids = torch.index_select(batch.input_ids, 1, batch.token_idx - 1)
-        #     # right_padding = MAX_TOTAL_TOKENS - batch.attention_mask.shape[1]
-        #     # batch.input_ids = torch.nn.functional.pad(
-        #     #     batch.input_ids, (0, 0, 0, batch_padding), value=0
-        #     # )
-        #     # batch.attention_mask = torch.nn.functional.pad(
-        #     #     batch.attention_mask, (0, right_padding, 0, batch_padding), value=0
-        #     # )
-        #     # if batch.position_ids is not None:
-        #     #     batch.position_ids = torch.nn.functional.pad(
-        #     #         batch.position_ids, (0, 0, 0, batch_padding), value=batch.position_ids[0, 0].item()
-        #     #     )
-        #     # if batch.cross_attention_mask is not None:
-        #     #     batch.cross_attention_mask = torch.nn.functional.pad(
-        #     #         batch.cross_attention_mask, (0, 0, 0, 0, 0, right_padding), value=0
-        #     #     )
-        #     # if batch.past_key_values is not None:
-        #     #     past_key_values_list = list(batch.past_key_values)
-        #     #     for layer_id in range(len(batch.past_key_values)):
-        #     #         past_key_value_list = list(batch.past_key_values[layer_id])
-        #     #         if layer_id in CROSS_ATTENTION_LAYERS:
-        #     #             past_key_value_list[0] = torch.nn.functional.pad(
-        #     #                 batch.past_key_values[0], (0, 0, 0, 0, 0, 0, 0, batch_padding), value=0
-        #     #             )
-        #     #             past_key_value_list[layer_id][1] = torch.nn.functional.pad(
-        #     #                 batch.past_key_values[1], (0, 0, 0, 0, 0, 0, 0, batch_padding), value=0
-        #     #             )
-                        
-        #     #         else:
-        #     #             past_key_value_list[0] = torch.nn.functional.pad(
-        #     #                 batch.past_key_values[layer_id][0], (0, 0, 0, right_padding, 0, 0, 0, batch_padding), value=0
-        #     #             )
-        #     #             past_key_value_list[1] = torch.nn.functional.pad(
-        #     #                 batch.past_key_values[layer_id][1], (0, 0, 0, right_padding, 0, 0, 0, batch_padding), value=0
-        #     #             )
-        #     #         past_key_values_list[layer_id] = tuple(past_key_value_list)
-        #     #     batch.past_key_values = tuple(past_key_values_list)
-        #     # batch.prefilling = False
-        #     return batch 
-            
-        # total_batch_size = 0
-        # max_input_length = 0
-        # padding_right_offset = 0
-        # for i, batch in enumerate(batches):
-        #     total_batch_size += len(batch)
-        #     max_input_length = max(max_input_length, batch.seq_length)
-        #     padding_right_offset = max(padding_right_offset, batch.right_padding)
-        #     logger.info(f"padding_right_offset={padding_right_offset}")
-
-        # # Batch attributes
-        # requests = []
-        # input_lengths = []
-        # top_n_tokens = []
-        # max_tokens = 0
-        # parameters = []
-        # fsm_grammar_states = []
-
-        # # Batch tensors
-        # input_ids = None
-        # attention_mask = None
-        # position_ids = None
-        # past_key_values = []
-        # top_n_tokens_tensor = None
-        # cross_attention_mask = None
-        # # Used for slicing correctly inside the tensors
-        # # Equivalent to a cumsum on batch sizes
-        # start_index = 0
-        # for i, batch in enumerate(batches):
-        #     if i != 0:
-        #         # We need to offset the mapping for each batch by the cumulative batch size
-        #         for request in batch.requests:
-        #             new_idx = request.idx + start_index
-        #             request.update_idx(new_idx)
-
-
-        #     requests.extend(batch.requests)
-        #     parameters.extend([r.data.parameters for r in batch.requests])
-        #     fsm_grammar_states.extend([batch.next_token_chooser.fsm_grammar_states[i] for i in range(len(batch.requests))])
-        #     input_lengths.extend([batch.input_length])
-        #     top_n_tokens.extend(batch.top_n_tokens)
-
-        #              # Slicing end index for this batch
-        #     end_index = start_index + len(batch)
-
-        #     # We only concatenate batches that did at least one step
-        #     if batch.past_key_values is None:
-        #         raise ValueError("only concatenate prefilled batches")
-
-        #     # Create empty tensor
-        #     # input_ids is always of shape [batch_size, 1]
-        #     # We do not need to pad it
-        #     if input_ids is None:
-        #         input_ids = batch.input_ids.new_empty((new_bs, MAX_TOTAL_TOKENS))
-        #     # # Copy to correct indices
-        #     # if batch.prefilling:
-        #     #     batch.input_ids = torch.index_select(batch.input_ids, 1, batch.token_idx - 1)
-                
-        #     left_offset = max_input_length - batch.seq_length
-        #     right_padding = MAX_TOTAL_TOKENS - max_input_length
-        #     logger.info(f"max_input_length={max_input_length}")
-        #     logger.info(f"batch.seq_length={batch.seq_length}")
-        #     logger.info(f"left_offset={left_offset}")
-        #     logger.info(f"batch.input_ids.shape={batch.input_ids.shape}")
-        #     logger.info(f"input_ids.shape={input_ids.shape}")
-        #     input_ids[start_index:end_index, left_offset:-right_padding] = batch.input_ids[:len(batch)]
-
-        #     # Create padded tensor
-        #     if attention_mask is None:
-        #         attention_mask = batch.attention_mask.new_zeros(
-        #             (new_bs, MAX_TOTAL_TOKENS),
-        #         )
-        #         logger.info(f"allocate attention_mask.shape={attention_mask.shape}")
-
-        #     if top_n_tokens_tensor is None:
-        #         top_n_tokens_tensor = batches[0].top_n_tokens_tensor.new_zeros(
-        #             total_batch_size,
-        #         )
-        #     top_n_tokens_tensor[start_index:end_index] = batch.top_n_tokens_tensor
-
-        #     # We need to slice the attention mask to remove padding from previous steps
-        #     # and to remove unused allocated space
-        #     # batch_left_offset = (
-        #     #     batch.attention_mask.shape[1]
-        #     #     - batch.max_input_length
-        #     #     - batch.padding_right_offset
-        #     # )
-        #     logger.info(f"left_offset={left_offset}")
-        #     logger.info(f"max_input_length={max_input_length}")
-        #     logger.info(f"padding_right_offset={padding_right_offset}")
-        #     logger.info(f"batch.max_input_length={batch.max_input_length}")
-        #     attention_mask[
-        #         start_index:end_index,
-        #         left_offset:-right_padding,
-        #     ] = batch.attention_mask[
-        #         :len(batch),
-        #         :,
-        #     ]
-            
-        #     if batch.cross_attention_mask is not None:
-        #         cross_attention_mask_shape = batch.cross_attention_mask.shape
-        #         cross_attention_mask_shape[1] = MAX_TOTAL_TOKENS
-        #         cross_attention_mask_shape[0] = new_bs
-        #         if cross_attention_mask is None:
-        #             cross_attention_mask = batch.cross_attention_mask.new_zeros(
-        #                 cross_attention_mask_shape,
-        #             )
-        #         cross_attention_mask[
-        #             start_index:end_index,
-        #             left_offset:-right_padding,
-        #         ] = batch.cross_attention_mask[
-        #             :len(batch),
-        #             :,
-        #         ]
-                
-        #     # Create empty tensor
-        #     # position_ids is always of shape [batch_size, 1]
-        #     if position_ids is None:
-        #         position_ids = batch.position_ids.new_empty((new_bs, 1))
-        #     position_ids[start_index:end_index] = batch.position_ids
-
-        #     # Shenanigans to get dimensions because BLOOM outputs a past with a different shape
-        #     # BLOOM Keys:   [batch_size * num_heads, head_dim, seq_length]
-        #     # BLOOM Values: [batch_size * num_heads, seq_length, head_dim]
-        #     # And ensure that we can update tensors in-place
-        #     if isinstance(batch.past_key_values[0], tuple):
-        #         batch.past_key_values = [
-        #             [t.view(len(batch), -1, *t.shape[-2:]) for t in layer]
-        #             for layer in batch.past_key_values
-        #         ]
-        #     elif len(batch.past_key_values[0][0].shape) == 3:
-        #         for layer in batch.past_key_values:
-        #             for k, t in enumerate(layer):
-        #                 layer[k] = t.view(len(batch), -1, *t.shape[-2:])
-
-        #     # Add eventual padding tokens that were added while concatenating
-        #     # max_tokens += batch.max_tokens + (
-        #     #     max_input_length - batch.max_input_length
-        #     # ) * len(batch)
-
-        #     start_index = end_index
-
-        # first_past_kvs = batches[0].past_key_values
-        # _, num_heads, padded_sequence_length, head_dim = first_past_kvs[0][1].shape
-        # past_key_values = []
-        # for layer_id in range(len(batches[0].past_key_values)):
-        #     if layer_id in CROSS_ATTENTION_LAYERS:
-        #         padded_past_keys_shape = batches[0].past_key_values[layer_id][0].shape
-        #         padded_past_keys_shape[0] = new_bs
-        #     else:
-        #         padded_past_keys_shape = (
-        #             new_bs,
-        #             num_heads,
-        #             MAX_TOTAL_TOKENS,
-        #             head_dim,
-        #         )
-
-        #     padded_past_keys = first_past_kvs[layer_id][0].new_zeros(padded_past_keys_shape)
-        #     padded_past_values = first_past_kvs[layer_id][1].new_zeros(padded_past_keys_shape)
-        #     start_index = 0
-        #     for batch in batches:
-        #         past_keys = batch.past_key_values[layer_id][0]
-        #         past_values = batch.past_key_values[layer_id][1]
-        #         # Clear reference to the original tensor
-        #         batch.past_key_values[layer_id] = None
-
-        #         # Slicing end index for this batch
-        #         end_index = start_index + len(batch)
-        #         # We slice the keys to remove the padding from previous batches
-        #         if layer_id in CROSS_ATTENTION_LAYERS:
-        #             padded_past_keys[start_index:end_index, :, :, :] = (
-        #                 past_keys[:, :, :, :]
-        #             )
-        #             padded_past_values[start_index:end_index, :, :, :] = (
-        #                 past_values[:, :, :, :]
-        #             )
-                    
-        #         else:
-        #             padded_past_keys[start_index:end_index, :, left_offset:-right_padding, :] = (
-        #                 past_keys[:, :, :, :]
-        #             )
-        #             padded_past_values[start_index:end_index, :, left_offset:-right_padding, :] = (
-        #                 past_values[:, :, :, :]
-        #             )
-
-        #         start_index = end_index
-
-        #     past_key_values.append(tuple([padded_past_keys, padded_past_values]))
-        # past_key_values = tuple(past_key_values) 
-        
-        
-        # batch_id = batches[0].batch_id
-        # next_token_chooser = HeterogeneousNextTokenChooser.from_pb(
-        #     parameters,
-        #     batches[0].next_token_chooser.dtype,
-        #     batches[0].next_token_chooser.device,
-        #     batches[0].next_token_chooser.tokenizer,
-        #     fsm_grammar_states,
-        #     quantization_enabled=hq_env.is_quantization_enabled,
-        # )
-        # input_length = max_input_length - 1
-        
+        if not all(b.past_key_values is not None for b in batches):
+            raise ValueError("KV cache not allocated! Cannot recombine before prefill!")
+            # Used for padding
         
         total_requests = sum(len(b) for b in batches)
         new_bs = total_requests
-        if is_warmup is False :
-            new_bs = round_up(DECODE_WARMUP_BATCH_SIZE_LIST, total_requests)
-        device = batches[0].input_ids.device
-
-        batch_id = batches[0].batch_id
-        input_lengths = [b.input_length for b in batches]
-        max_input_length = max(input_lengths)
-        logger.info(f"max_input_length:{max_input_length}")
-        offsets = [max_input_length - b.input_length for b in batches]
-        logger.info(f"offsets:{offsets}")
-
-        cur_padding = [b.right_padding for b in batches]
-        logger.info(f"cur_padding={cur_padding}")
-        # For prefill there is a space allocated only for first token
-        # Need to add padding to the max total tokens before first decode
-
-        moves_needed = [total_requests - len(b) if b.batch_size == new_bs else total_requests for b in batches]
-        dst_batch_idx = min(enumerate(moves_needed), key=lambda idx_val: idx_val[1])[0]
-        reshape = (batches[dst_batch_idx].batch_size < new_bs)
-
-        # TODO: Add support for changing max seq len, i.e. due to output length bucketing
-        # FIXME: max_seq_len for non optimized code
+        if not is_warmup:
+            new_bs = round_up(DECODE_WARMUP_BATCH_SIZE_LIST,total_requests)
+        batch_padding = new_bs - total_requests
+            
+        concat_needed = False
+        only_padding_needed = False
         if len(batches) > 1:
-            scenario = 'CONCAT'
-        elif reshape:
-            scenario = 'RESHAPE'
-        elif cur_padding[dst_batch_idx] <= 0:
-            scenario = 'SHIFT'
-            offsets = [biggest_single_chunk(b.max_input_length - max_input_length) for b in batches]
-            logger.info(f"offset:{offsets}")
-            max_input_length = max_input_length + offsets[dst_batch_idx]
-            logger.info(f"max_input_length:{max_input_length}")
+            concat_needed = True
+        elif batches[0].prefilling:
+            logger.info(f"prefilling padding++++++++++++++")
+            only_padding_needed = True
+            batch = batches[0]
+            batch.padding_process(pad_token_id)
+            return batch
         else:
-            # Nothing to do
+            logger.info(f"do nothing prefilling batch+++++++++++")
             return batches[0]
 
-        logger.info(
-            f'scenario:{scenario}'
-            f'bs:{[b.batch_size for b in batches]}->{new_bs}'
-            f' reqs:{[len(b) for b in batches]}'
-            f' offsets:{offsets}'
-            f' input_lengths:{input_lengths}'
-            f' cur_padding:{cur_padding}'
-            f' dst_batch:{dst_batch_idx}')
+        if only_padding_needed:
+            batch = batches[0]
+            batch.padding_process(pad_token_id)
+            # batch.input_ids = torch.index_select(batch.input_ids, 1, batch.token_idx - 1)
+            # right_padding = MAX_TOTAL_TOKENS - batch.attention_mask.shape[1]
+            # batch.input_ids = torch.nn.functional.pad(
+            #     batch.input_ids, (0, 0, 0, batch_padding), value=0
+            # )
+            # batch.attention_mask = torch.nn.functional.pad(
+            #     batch.attention_mask, (0, right_padding, 0, batch_padding), value=0
+            # )
+            # if batch.position_ids is not None:
+            #     batch.position_ids = torch.nn.functional.pad(
+            #         batch.position_ids, (0, 0, 0, batch_padding), value=batch.position_ids[0, 0].item()
+            #     )
+            # if batch.cross_attention_mask is not None:
+            #     batch.cross_attention_mask = torch.nn.functional.pad(
+            #         batch.cross_attention_mask, (0, 0, 0, 0, 0, right_padding), value=0
+            #     )
+            # if batch.past_key_values is not None:
+            #     past_key_values_list = list(batch.past_key_values)
+            #     for layer_id in range(len(batch.past_key_values)):
+            #         past_key_value_list = list(batch.past_key_values[layer_id])
+            #         if layer_id in CROSS_ATTENTION_LAYERS:
+            #             past_key_value_list[0] = torch.nn.functional.pad(
+            #                 batch.past_key_values[0], (0, 0, 0, 0, 0, 0, 0, batch_padding), value=0
+            #             )
+            #             past_key_value_list[layer_id][1] = torch.nn.functional.pad(
+            #                 batch.past_key_values[1], (0, 0, 0, 0, 0, 0, 0, batch_padding), value=0
+            #             )
+                        
+            #         else:
+            #             past_key_value_list[0] = torch.nn.functional.pad(
+            #                 batch.past_key_values[layer_id][0], (0, 0, 0, right_padding, 0, 0, 0, batch_padding), value=0
+            #             )
+            #             past_key_value_list[1] = torch.nn.functional.pad(
+            #                 batch.past_key_values[layer_id][1], (0, 0, 0, right_padding, 0, 0, 0, batch_padding), value=0
+            #             )
+            #         past_key_values_list[layer_id] = tuple(past_key_value_list)
+            #     batch.past_key_values = tuple(past_key_values_list)
+            # batch.prefilling = False
+            return batch 
+            
+        total_batch_size = 0
+        max_input_length = 0
+        padding_right_offset = 0
+        for i, batch in enumerate(batches):
+            total_batch_size += len(batch)
+            max_input_length = max(max_input_length, batch.input_length) 
+            padding_right_offset = max(padding_right_offset, batch.right_padding)
+            logger.info(f"padding_right_offset={padding_right_offset}")
 
-        grouped_requests = [[req for req in batch.requests] for batch in batches]
-        flat_requests = list(itertools.chain(*grouped_requests))
+        # Batch attributes
+        requests = []
+        input_lengths = []
+        top_n_tokens = []
+        max_tokens = 0
+        parameters = []
+        fsm_grammar_states = []
 
-        for i in range(len(batches)):
-            target_bs = new_bs if i == dst_batch_idx else batches[i].batch_size
-            batches[i].merge_kv_cache_if_needed(target_bs, offsets[i])
-            batches[i].realign(target_bs, offsets[i], pad_token_id)
-            batches[i].split_kv_cache_if_needed(i == dst_batch_idx)
-        batches[dst_batch_idx].expand_bs(new_bs)
-        batches[dst_batch_idx].move_data([batches[i] for i in range(len(batches)) if i != dst_batch_idx])
+        # Batch tensors
+        input_ids = None
+        attention_mask = None
+        position_ids = None
+        past_key_values = []
+        top_n_tokens_tensor = None
+        cross_attention_mask = None
+        # Used for slicing correctly inside the tensors
+        # Equivalent to a cumsum on batch sizes
+        start_index = 0
+        for i, batch in enumerate(batches):
+            if i != 0:
+                # We need to offset the mapping for each batch by the cumulative batch size
+                for request in batch.requests:
+                    new_idx = request.idx + start_index
+                    request.update_idx(new_idx)
 
-        top_n_tokens = [r.data.top_n_tokens for r in flat_requests]
-        top_n_tokens_tensor = torch.tensor(top_n_tokens, device=device, dtype=torch.int64)
 
-        parameters = [r.data.parameters for r in flat_requests]
-        # append the dummy parameters for dummy requests
-        batch_size = batches[dst_batch_idx].batch_size
-        parameters = pad_next_token_chooser_parameters(parameters, batch_size)
+            requests.extend(batch.requests)
+            parameters.extend([r.data.parameters for r in batch.requests])
+            fsm_grammar_states.extend([batch.next_token_chooser.fsm_grammar_states[i] for i in range(len(batch.requests))])
+            input_lengths.extend([batch.input_length])
+            top_n_tokens.extend(batch.top_n_tokens)
 
-        # update past grammar states
-        fsm_grammar_states = [0] * batch_size
-        for batch in batches:
-            for i, req in enumerate(batch.requests):
-                fsm_grammar_states[req.idx] = batch.next_token_chooser.fsm_grammar_states[i]
+                     # Slicing end index for this batch
+            end_index = start_index + len(batch)
 
+            # We only concatenate batches that did at least one step
+            if batch.past_key_values is None:
+                raise ValueError("only concatenate prefilled batches")
+
+            # Create empty tensor
+            # input_ids is always of shape [batch_size, 1]
+            # We do not need to pad it
+            if input_ids is None:
+                input_ids = batch.input_ids.new_empty((new_bs, MAX_TOTAL_TOKENS))
+            # # Copy to correct indices
+            # if batch.prefilling:
+            #     batch.input_ids = torch.index_select(batch.input_ids, 1, batch.token_idx - 1)
+                
+            left_offset = max_input_length - batch.input_ids.shape[1]
+            right_padding = MAX_TOTAL_TOKENS - max_input_length
+            logger.info(f"max_input_length={max_input_length}")
+            logger.info(f"batch.input_length={batch.input_length}")
+            logger.info(f"left_offset={left_offset}")
+            logger.info(f"batch.input_ids.shape={batch.input_ids.shape}")
+            logger.info(f"input_ids.shape={input_ids.shape}")
+            input_ids[start_index:end_index, left_offset:-right_padding] = batch.input_ids[:len(batch)]
+
+            # Create padded tensor
+            if attention_mask is None:
+                attention_mask = batch.attention_mask.new_zeros(
+                    (new_bs, MAX_TOTAL_TOKENS),
+                )
+                logger.info(f"allocate attention_mask.shape={attention_mask.shape}")
+
+            if top_n_tokens_tensor is None:
+                top_n_tokens_tensor = batches[0].top_n_tokens_tensor.new_zeros(
+                    total_batch_size,
+                )
+            top_n_tokens_tensor[start_index:end_index] = batch.top_n_tokens_tensor
+
+            # We need to slice the attention mask to remove padding from previous steps
+            # and to remove unused allocated space
+            # batch_left_offset = (
+            #     batch.attention_mask.shape[1]
+            #     - batch.max_input_length
+            #     - batch.padding_right_offset
+            # )
+            logger.info(f"left_offset={left_offset}")
+            logger.info(f"max_input_length={max_input_length}")
+            logger.info(f"padding_right_offset={padding_right_offset}")
+            logger.info(f"batch.max_input_length={batch.max_input_length}")
+            attention_mask[
+                start_index:end_index,
+                left_offset:-right_padding,
+            ] = batch.attention_mask[
+                :len(batch),
+                :,
+            ]
+            
+            if batch.cross_attention_mask is not None:
+                cross_attention_mask_shape = batch.cross_attention_mask.shape
+                cross_attention_mask_shape[1] = MAX_TOTAL_TOKENS
+                cross_attention_mask_shape[0] = new_bs
+                if cross_attention_mask is None:
+                    cross_attention_mask = batch.cross_attention_mask.new_zeros(
+                        cross_attention_mask_shape,
+                    )
+                cross_attention_mask[
+                    start_index:end_index,
+                    left_offset:-right_padding,
+                ] = batch.cross_attention_mask[
+                    :len(batch),
+                    :,
+                ]
+                
+            # Create empty tensor
+            # position_ids is always of shape [batch_size, 1]
+            if position_ids is None:
+                position_ids = batch.position_ids.new_empty((new_bs, 1))
+            position_ids[start_index:end_index] = batch.position_ids
+
+            # Shenanigans to get dimensions because BLOOM outputs a past with a different shape
+            # BLOOM Keys:   [batch_size * num_heads, head_dim, seq_length]
+            # BLOOM Values: [batch_size * num_heads, seq_length, head_dim]
+            # And ensure that we can update tensors in-place
+            if isinstance(batch.past_key_values[0], tuple):
+                batch.past_key_values = [
+                    [t.view(len(batch), -1, *t.shape[-2:]) for t in layer]
+                    for layer in batch.past_key_values
+                ]
+            elif len(batch.past_key_values[0][0].shape) == 3:
+                for layer in batch.past_key_values:
+                    for k, t in enumerate(layer):
+                        layer[k] = t.view(len(batch), -1, *t.shape[-2:])
+
+            # Add eventual padding tokens that were added while concatenating
+            # max_tokens += batch.max_tokens + (
+            #     max_input_length - batch.max_input_length
+            # ) * len(batch)
+
+            start_index = end_index
+
+        first_past_kvs = batches[0].past_key_values
+        _, num_heads, padded_sequence_length, head_dim = first_past_kvs[0][1].shape
+        past_key_values = []
+        for layer_id in range(len(batches[0].past_key_values)):
+            if layer_id in CROSS_ATTENTION_LAYERS:
+                padded_past_keys_shape = batches[0].past_key_values[layer_id][0].shape
+                padded_past_keys_shape[0] = new_bs
+            else:
+                padded_past_keys_shape = (
+                    new_bs,
+                    num_heads,
+                    MAX_TOTAL_TOKENS,
+                    head_dim,
+                )
+
+            padded_past_keys = first_past_kvs[layer_id][0].new_zeros(padded_past_keys_shape)
+            padded_past_values = first_past_kvs[layer_id][1].new_zeros(padded_past_keys_shape)
+            start_index = 0
+            for batch in batches:
+                past_keys = batch.past_key_values[layer_id][0]
+                past_values = batch.past_key_values[layer_id][1]
+                # Clear reference to the original tensor
+                batch.past_key_values[layer_id] = None
+
+                # Slicing end index for this batch
+                end_index = start_index + len(batch)
+                # We slice the keys to remove the padding from previous batches
+                if layer_id in CROSS_ATTENTION_LAYERS:
+                    padded_past_keys[start_index:end_index, :, :, :] = (
+                        past_keys[:, :, :, :]
+                    )
+                    padded_past_values[start_index:end_index, :, :, :] = (
+                        past_values[:, :, :, :]
+                    )
+                    
+                else:
+                    padded_past_keys[start_index:end_index, :, left_offset:-right_padding, :] = (
+                        past_keys[:, :, :, :]
+                    )
+                    padded_past_values[start_index:end_index, :, left_offset:-right_padding, :] = (
+                        past_values[:, :, :, :]
+                    )
+
+                start_index = end_index
+
+            past_key_values.append(tuple([padded_past_keys, padded_past_values]))
+        past_key_values = tuple(past_key_values) 
+        
+        
+        batch_id = batches[0].batch_id
         next_token_chooser = HeterogeneousNextTokenChooser.from_pb(
             parameters,
-            batches[dst_batch_idx].next_token_chooser.dtype,
-            batches[dst_batch_idx].next_token_chooser.device,
-            batches[dst_batch_idx].next_token_chooser.tokenizer,
+            batches[0].next_token_chooser.dtype,
+            batches[0].next_token_chooser.device,
+            batches[0].next_token_chooser.tokenizer,
             fsm_grammar_states,
             quantization_enabled=hq_env.is_quantization_enabled,
         )
-
-        input_ids = batches[dst_batch_idx].input_ids
-        attention_mask = batches[dst_batch_idx].attention_mask
-        position_ids = batches[dst_batch_idx].position_ids
-        past_key_values = batches[dst_batch_idx].past_key_values
-        pixel_values = None
-        pixel_attention_mask = None
-        image_sizes = None
-        aspect_ratio_ids = None
-        aspect_ratio_mask = None
-        cross_attention_mask = batches[dst_batch_idx].cross_attention_mask
         input_length = max_input_length
+        
+        
+        # total_requests = sum(len(b) for b in batches)
+        # new_bs = total_requests
+        # if is_warmup is False :
+        #     new_bs = round_up(DECODE_WARMUP_BATCH_SIZE_LIST, total_requests)
+        # device = batches[0].input_ids.device
+
+        # batch_id = batches[0].batch_id
+        # input_lengths = [b.input_length for b in batches]
+        # max_input_length = max(input_lengths)
+        # logger.info(f"max_input_length:{max_input_length}")
+        # offsets = [max_input_length - b.input_length for b in batches]
+        # logger.info(f"offsets:{offsets}")
+
+        # cur_padding = [b.right_padding for b in batches]
+        # logger.info(f"cur_padding={cur_padding}")
+        # # For prefill there is a space allocated only for first token
+        # # Need to add padding to the max total tokens before first decode
+
+        # moves_needed = [total_requests - len(b) if b.batch_size == new_bs else total_requests for b in batches]
+        # dst_batch_idx = min(enumerate(moves_needed), key=lambda idx_val: idx_val[1])[0]
+        # reshape = (batches[dst_batch_idx].batch_size < new_bs)
+
+        # # TODO: Add support for changing max seq len, i.e. due to output length bucketing
+        # # FIXME: max_seq_len for non optimized code
+        # if len(batches) > 1:
+        #     scenario = 'CONCAT'
+        # elif reshape:
+        #     scenario = 'RESHAPE'
+        # elif cur_padding[dst_batch_idx] <= 0:
+        #     scenario = 'SHIFT'
+        #     offsets = [biggest_single_chunk(b.max_input_length - max_input_length) for b in batches]
+        #     logger.info(f"offset:{offsets}")
+        #     max_input_length = max_input_length + offsets[dst_batch_idx]
+        #     logger.info(f"max_input_length:{max_input_length}")
+        # else:
+        #     # Nothing to do
+        #     return batches[0]
+
+        # logger.info(
+        #     f'scenario:{scenario}'
+        #     f'bs:{[b.batch_size for b in batches]}->{new_bs}'
+        #     f' reqs:{[len(b) for b in batches]}'
+        #     f' offsets:{offsets}'
+        #     f' input_lengths:{input_lengths}'
+        #     f' cur_padding:{cur_padding}'
+        #     f' dst_batch:{dst_batch_idx}')
+
+        # grouped_requests = [[req for req in batch.requests] for batch in batches]
+        # flat_requests = list(itertools.chain(*grouped_requests))
+
+        # for i in range(len(batches)):
+        #     target_bs = new_bs if i == dst_batch_idx else batches[i].batch_size
+        #     batches[i].merge_kv_cache_if_needed(target_bs, offsets[i])
+        #     batches[i].realign(target_bs, offsets[i], pad_token_id)
+        #     batches[i].split_kv_cache_if_needed(i == dst_batch_idx)
+        # batches[dst_batch_idx].expand_bs(new_bs)
+        # batches[dst_batch_idx].move_data([batches[i] for i in range(len(batches)) if i != dst_batch_idx])
+
+        # top_n_tokens = [r.data.top_n_tokens for r in flat_requests]
+        # top_n_tokens_tensor = torch.tensor(top_n_tokens, device=device, dtype=torch.int64)
+
+        # parameters = [r.data.parameters for r in flat_requests]
+        # # append the dummy parameters for dummy requests
+        # batch_size = batches[dst_batch_idx].batch_size
+        # parameters = pad_next_token_chooser_parameters(parameters, batch_size)
+
+        # # update past grammar states
+        # fsm_grammar_states = [0] * batch_size
+        # for batch in batches:
+        #     for i, req in enumerate(batch.requests):
+        #         fsm_grammar_states[req.idx] = batch.next_token_chooser.fsm_grammar_states[i]
+
+        # next_token_chooser = HeterogeneousNextTokenChooser.from_pb(
+        #     parameters,
+        #     batches[dst_batch_idx].next_token_chooser.dtype,
+        #     batches[dst_batch_idx].next_token_chooser.device,
+        #     batches[dst_batch_idx].next_token_chooser.tokenizer,
+        #     fsm_grammar_states,
+        #     quantization_enabled=hq_env.is_quantization_enabled,
+        # )
+
+        # input_ids = batches[dst_batch_idx].input_ids
+        # attention_mask = batches[dst_batch_idx].attention_mask
+        # position_ids = batches[dst_batch_idx].position_ids
+        # past_key_values = batches[dst_batch_idx].past_key_values
+        # pixel_values = None
+        # pixel_attention_mask = None
+        # image_sizes = None
+        # aspect_ratio_ids = None
+        # aspect_ratio_mask = None
+        # cross_attention_mask = batches[dst_batch_idx].cross_attention_mask
+        # input_length = max_input_length
 
         htorch.core.mark_step()
         # if past_key_values is not None:
@@ -884,13 +891,15 @@ class VlmCausalLMBatch(CausalLMBatch):
         logger.info(f"recombine+++++++++++++++++++++")
         logger.info(f"batch_id={batch_id}")
         logger.info(f"input_ids.shape={input_ids.shape}")
+        for i in range(3800, 3841):
+            logger.info(f"input_ids[{i}]={input_ids[0][i]}")
         logger.info(f"attention_mask.shape={attention_mask.shape}")
         logger.info(f"position_ids.shape={position_ids.shape}")
         logger.info(f"len(past_key_values)={len(past_key_values)}")
         logger.info(f"type(past_key_values)={type(past_key_values)}")
-        for layer_id in range(len(past_key_values)):
-            logger.info(f"recombine key.shape={past_key_values[layer_id][0].shape}")
-            logger.info(f"recombine value.shape={past_key_values[layer_id][1].shape}")
+        # for layer_id in range(len(past_key_values)):
+        #     logger.info(f"recombine key.shape={past_key_values[layer_id][0].shape}")
+        #     logger.info(f"recombine value.shape={past_key_values[layer_id][1].shape}")
         if cross_attention_mask is not None:
             logger.info(f"cross_attention_mask.shape={cross_attention_mask.shape}")
         logger.info(f"input_length={input_length}")
@@ -900,7 +909,7 @@ class VlmCausalLMBatch(CausalLMBatch):
 
         return cls(
             batch_id=batch_id,
-            requests=flat_requests,
+            requests=requests,
             input_ids=input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -1201,21 +1210,22 @@ class VlmCausalLM(Model):
         kwargs.update(self.kwargs)
         model_inputs = self.model.prepare_inputs_for_generation(**kwargs)
         #htorch.core.mark_step()
-        #logger.info(f"input_ids: {model_inputs['input_ids'].shape}")
+        logger.info(f"batch.input_ids: {batch.input_ids}")
+        logger.info(f"batch.input_ids.shape: {batch.input_ids.shape}")
         logger.info(f"after prepare attention_mask: {model_inputs['attention_mask'].shape}")
         logger.info(f"after prepare position_ids.shape: {batch.position_ids.shape}")
         logger.info(f"forward--------------------")
         if batch.past_key_values is not None:
-            for layer_id in range(len(batch.past_key_values)):
-                logger.info(f"decode key.shape={batch.past_key_values[layer_id][0].shape}")
-                logger.info(f"decode value.shape={batch.past_key_values[layer_id][1].shape}")
+            # for layer_id in range(len(batch.past_key_values)):
+            #     logger.info(f"decode key.shape={batch.past_key_values[layer_id][0].shape}")
+            #     logger.info(f"decode value.shape={batch.past_key_values[layer_id][1].shape}")
 
             return self.model.forward(**model_inputs, **hpu_kwargs)
         else:
             outputs = self.model.forward(**model_inputs, **hpu_kwargs)
-            for layer_id in range(len(outputs.past_key_values)):
-                logger.info(f"prefill key.shape={outputs.past_key_values[layer_id][0].shape}")
-                logger.info(f"prefill value.shape={outputs.past_key_values[layer_id][1].shape}")
+            # for layer_id in range(len(outputs.past_key_values)):
+            #     logger.info(f"prefill key.shape={outputs.past_key_values[layer_id][0].shape}")
+            #     logger.info(f"prefill value.shape={outputs.past_key_values[layer_id][1].shape}")
             return outputs.logits, outputs.past_key_values
 
     @tracer.start_as_current_span("generate_token")
@@ -1497,6 +1507,7 @@ class VlmCausalLM(Model):
                 htorch.core.mark_step()
 
                 # Add new token into input_ids
+                logger.info(f"token_idx={token_idx}")
                 batch.input_ids.index_copy_(1, token_idx, next_token_ids.unsqueeze(1))
 
                 # Update attention_mask as we added a new token to input_ids
