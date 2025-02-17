@@ -88,7 +88,7 @@ def round_up(warmup_list:list, num) :
     for i in warmup_list:
         if num <= i :
             break
-    return i
+    return i if i > 0 else num
 
 def split(string) -> List[Dict[str, str]]:
     parts = []
@@ -280,6 +280,7 @@ class VlmCausalLMBatch(CausalLMBatch):
 
         input_ids = tokenized_inputs["input_ids"]
         attention_mask = tokenized_inputs["attention_mask"]
+        cross_attention_mask = tokenized_inputs.get("cross_attention_mask", None)
         # Allocate space for first token
         if left_padding > 0:
             input_ids = torch.nn.functional.pad(
@@ -288,6 +289,10 @@ class VlmCausalLMBatch(CausalLMBatch):
             attention_mask = torch.nn.functional.pad(
                 attention_mask, (left_padding, 1), value=0
             )
+            if cross_attention_mask is not None:
+                cross_attention_mask = torch.nn.functional.pad(
+                    cross_attention_mask, (0, 0, 0, 0, left_padding, 1), value=0
+                )
         all_input_ids = torch.nn.functional.pad(
             input_ids, (0, max_new_tokens), value=tokenizer.pad_token_id
         ).T.split(1, dim=1)
@@ -301,6 +306,7 @@ class VlmCausalLMBatch(CausalLMBatch):
             r.all_input_ids = all_input_ids[r.idx]
         input_ids = input_ids.to(device)
         attention_mask = attention_mask.to(device)
+        cross_attention_mask = cross_attention_mask.to(device) if cross_attention_mask is not None else None
         position_ids = attention_mask.long().cumsum(-1) - 1
         position_ids.masked_fill_(attention_mask == 0, 1)
 
@@ -318,6 +324,7 @@ class VlmCausalLMBatch(CausalLMBatch):
             top_n_tokens=top_n_tokens,
             top_n_tokens_tensor=top_n_tokens_tensor,
             input_length=input_len,
+            cross_attention_mask=cross_attention_mask,
         )
 
     @classmethod
@@ -379,6 +386,8 @@ class VlmCausalLMBatch(CausalLMBatch):
             batch_tokenized_inputs.update({"input_ids" : processor_output["input_ids"]})
         if "attention_mask" in processor_output:
             batch_tokenized_inputs.update({"attention_mask" : processor_output["attention_mask"]})
+        if "cross_attention_mask" in processor_output:
+            batch_tokenized_inputs.update({"cross_attention_mask" : processor_output["cross_attention_mask"]})
         if "pixel_values" in processor_output:
             image_inputs.update({"pixel_values" : processor_output["pixel_values"]})
         if "pixel_attention_mask" in processor_output:
@@ -387,8 +396,6 @@ class VlmCausalLMBatch(CausalLMBatch):
             image_inputs.update({"aspect_ratio_ids" : processor_output["aspect_ratio_ids"]})
         if "aspect_ratio_mask" in processor_output:
             image_inputs.update({"aspect_ratio_mask" : processor_output["aspect_ratio_mask"]})
-        if "cross_attention_mask" in processor_output:
-            image_inputs.update({"cross_attention_mask" : processor_output["cross_attention_mask"]})
         if "image_sizes" in processor_output:
             image_inputs.update({"image_sizes" : processor_output["image_sizes"]})
 
@@ -429,10 +436,6 @@ class VlmCausalLMBatch(CausalLMBatch):
                 batch.aspect_ratio_mask = image_inputs["aspect_ratio_mask"].to(device=device)
             else:
                 batch.aspect_ratio_mask = None
-            if "cross_attention_mask" in image_inputs:
-                batch.cross_attention_mask = image_inputs["cross_attention_mask"].to(device=device)
-            else:
-                batch.cross_attention_mask = None
         else:
             batch.pixel_values = None
             batch.pixel_attention_mask = None
@@ -488,13 +491,14 @@ class VlmCausalLMBatch(CausalLMBatch):
             # Nothing to do
             return batches[0]
 
-        dbg_trace(
-            scenario, f'bs:{[b.batch_size for b in batches]}->{new_bs}'
-                      f' reqs:{[len(b) for b in batches]}'
-                      f' offsets:{offsets}'
-                      f' input_lengths:{input_lengths}'
-                      f' cur_padding:{cur_padding}'
-                      f' dst_batch:{dst_batch_idx}')
+        logger.info(
+            f'scenario:{scenario}'
+            f'bs:{[b.batch_size for b in batches]}->{new_bs}'
+            f' reqs:{[len(b) for b in batches]}'
+            f' offsets:{offsets}'
+            f' input_lengths:{input_lengths}'
+            f' cur_padding:{cur_padding}'
+            f' dst_batch:{dst_batch_idx}')
 
         grouped_requests = [[req for req in batch.requests] for batch in batches]
         flat_requests = list(itertools.chain(*grouped_requests))
