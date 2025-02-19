@@ -274,7 +274,6 @@ class CausalLMBatch(Batch):
     top_n_tokens: List[int]
     top_n_tokens_tensor: torch.Tensor
 
-    input_length: int
 
     # Past metadata
     logits = None
@@ -404,6 +403,7 @@ class CausalLMBatch(Batch):
         offsets = [max_input_length - b.input_length for b in batches]
 
         cur_padding = [b.right_padding for b in batches]
+        logger.info(f"cur_padding={cur_padding}")
         # For prefill there is a space allocated only for first token
         # Need to add padding to the max total tokens before first decode
 
@@ -468,7 +468,7 @@ class CausalLMBatch(Batch):
         # update past grammar states
         fsm_grammar_states = [0] * batch_size
         for batch in batches:
-            for i, req in enumerate(batch.requests):
+            for i, req in enumerate(batch.requests): 
                 fsm_grammar_states[req.idx] = (
                     batch.next_token_chooser.fsm_grammar_states[i]
                 )
@@ -924,13 +924,17 @@ class CausalLM(Model):
             "past_key_values": past_key_values,
             "token_idx": token_idx,
         }
-
+        logger.info(f"input_ids.shape: {input_ids.shape}")
+        logger.info(f"attention_mask.shape: {attention_mask.shape}")
+        logger.info(f"position_ids.shape: {position_ids.shape}")
+        logger.info(f"token_idx: {token_idx}")
         # Optimum Habana got "lazy_mode" key-val only supported for llama type of models
         if self.model.config.model_type == "llama":
             kwargs["lazy_mode"] = LAZY_MODE == 1
 
         if self.has_position_ids:
             kwargs["position_ids"] = position_ids
+            logger.info(f"position_ids.shape: {position_ids.shape}")
 
         if bypass_hpu_graph != None:
             kwargs["bypass_hpu_graphs"] = bypass_hpu_graph
