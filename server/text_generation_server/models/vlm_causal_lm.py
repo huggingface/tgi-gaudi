@@ -470,12 +470,7 @@ class VlmCausalLMBatch(CausalLMBatch):
 
         # Batch attributes
         requests = []
-        requests_idx_mapping = {}
         input_lengths = []
-        prefix_offsets = []
-        read_offsets = []
-        all_input_ids = []
-        stopping_criterias = []
         top_n_tokens = []
         max_tokens = 0
         parameters = []
@@ -500,13 +495,9 @@ class VlmCausalLMBatch(CausalLMBatch):
 
 
             requests.extend(batch.requests)
-            parameters.extend([r.parameters for r in batch.requests])
+            parameters.extend([r.data.parameters for r in batch.requests])
             fsm_grammar_states.extend([batch.next_token_chooser.fsm_grammar_states[i] for i in range(len(batch.requests))])
-            input_lengths.extend(batch.input_lengths)
-            prefix_offsets.extend(batch.prefix_offsets)
-            read_offsets.extend(batch.read_offsets)
-            all_input_ids.extend(batch.all_input_ids)
-            stopping_criterias.extend(batch.stopping_criterias)
+            input_lengths.extend([batch.input_length])
             top_n_tokens.extend(batch.top_n_tokens)
 
                      # Slicing end index for this batch
@@ -539,17 +530,17 @@ class VlmCausalLMBatch(CausalLMBatch):
             # We need to slice the attention mask to remove padding from previous steps
             # and to remove unused allocated space
             left_offset = max_input_length - batch.max_input_length
-            batch_left_offset = (
-                batch.attention_mask.shape[1]
-                - batch.max_input_length
-                - batch.padding_right_offset
-            )
+            # batch_left_offset = (
+            #     batch.attention_mask.shape[1]
+            #     - batch.max_input_length
+            #     - batch.padding_right_offset
+            # )
             attention_mask[
                 start_index:end_index,
                 left_offset:-padding_right_offset,
             ] = batch.attention_mask[
                 :len(batch),
-                batch_left_offset : -batch.padding_right_offset,
+                :,
             ]
             
             if batch.cross_attention_mask is not None:
@@ -629,9 +620,12 @@ class VlmCausalLMBatch(CausalLMBatch):
                 # We slice the keys to remove the padding from previous batches
                 past_seq_len = batch.max_input_length - 1
                 left_offset = max_input_length - batch.max_input_length
+                logger.info(f"max_input_length={max_input_length}")
+                logger.info(f"batch.max_input_length={batch.max_input_length}")
+                logger.info(f"left_offset={left_offset}")
                 if batch.keys_head_dim_last:
-                    padded_past_keys[start_index:end_index, :, left_offset:, :] = (
-                        past_keys
+                    padded_past_keys[start_index:end_index, :, left_offset:batch.max_input_length, :] = (
+                        past_keys[:, :, :, :]
                     )
                 else:
                     # BLOOM case
@@ -656,7 +650,7 @@ class VlmCausalLMBatch(CausalLMBatch):
                 # We slice the past values to remove the padding from previous batches
                 past_seq_len = batch.max_input_length - 1
                 left_offset = max_input_length - batch.max_input_length
-                padded_past_values[start_index:end_index, :, left_offset:, :] = (
+                padded_past_values[start_index:end_index, :, left_offset:batch.max_input_length, :] = (
                     past_values[:, :, :, :]
                 )
                 del past_values
@@ -1189,6 +1183,8 @@ class VlmCausalLM(Model):
         # Check if we need to do any bookkeeping first
         if not prefill:
             logger.info(f"222222222222222222222")
+            token_idx = torch.tensor(batch.attention_mask.shape[-1] - batch.right_padding).to(self.device)
+            batch.input_ids = torch.index_select(batch.input_ids, 1, token_idx - 1)
             batch = self.batch_type.recombine([batch], self.tokenizer.pad_token_id, is_warmup)
 
         scenario = 'PREFILL' if prefill else 'GENERATE'
@@ -1213,7 +1209,7 @@ class VlmCausalLM(Model):
             # - we've already generated the first and only needed token in the prefill phase
             pass
         else:
-            token_idx = torch.tensor(batch.attention_mask.shape[-1] - batch.right_padding).to(self.device)
+            #token_idx = torch.tensor(batch.attention_mask.shape[-1] - batch.right_padding).to(self.device)
             batch.logits = self.forward(
                 batch,
                 token_idx,
