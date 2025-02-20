@@ -578,9 +578,9 @@ class VlmCausalLMBatch(CausalLMBatch):
                         layer[k] = t.view(len(batch), -1, *t.shape[-2:])
 
             # Add eventual padding tokens that were added while concatenating
-            max_tokens += batch.max_tokens + (
-                max_input_length - batch.max_input_length
-            ) * len(batch)
+            # max_tokens += batch.max_tokens + (
+            #     max_input_length - batch.max_input_length
+            # ) * len(batch)
 
             start_index = end_index
 
@@ -620,9 +620,9 @@ class VlmCausalLMBatch(CausalLMBatch):
                 # We slice the keys to remove the padding from previous batches
                 past_seq_len = batch.max_input_length - 1
                 left_offset = max_input_length - batch.max_input_length
-                logger.info(f"max_input_length={max_input_length}")
-                logger.info(f"batch.max_input_length={batch.max_input_length}")
-                logger.info(f"left_offset={left_offset}")
+                # logger.info(f"max_input_length={max_input_length}")
+                # logger.info(f"batch.max_input_length={batch.max_input_length}")
+                # logger.info(f"left_offset={left_offset}")
                 if batch.keys_head_dim_last:
                     padded_past_keys[start_index:end_index, :, left_offset:batch.max_input_length, :] = (
                         past_keys[:, :, :, :]
@@ -668,7 +668,8 @@ class VlmCausalLMBatch(CausalLMBatch):
             fsm_grammar_states,
             quantization_enabled=hq_env.is_quantization_enabled,
         )
-
+        input_length = max(input_lengths)
+        
         
         # total_requests = sum(len(b) for b in batches)
         # new_bs = total_requests
@@ -676,6 +677,7 @@ class VlmCausalLMBatch(CausalLMBatch):
         #     new_bs = round_up(DECODE_WARMUP_BATCH_SIZE_LIST, total_requests)
         # device = batches[0].input_ids.device
 
+        # batch_id = batches[0].batch_id
         # input_lengths = [b.input_length for b in batches]
         # max_input_length = max(input_lengths)
         # offsets = [max_input_length - b.input_length for b in batches]
@@ -760,12 +762,25 @@ class VlmCausalLMBatch(CausalLMBatch):
         # cross_attention_mask = batches[dst_batch_idx].cross_attention_mask
         # input_length = max_input_length
 
-        # htorch.core.mark_step()
+        htorch.core.mark_step()
         # if past_key_values is not None:
         #     for layer_id in range(len(past_key_values)):
         #         logger.info(f"decode key.shape={past_key_values[layer_id][0].shape}")
         #         logger.info(f"decode value.shape={past_key_values[layer_id][1].shape}")
-
+        logger.info(f"batch_id={batch_id}")
+        logger.info(f"input_ids.shape={input_ids.shape}")
+        logger.info(f"attention_mask.shape={attention_mask.shape}")
+        logger.info(f"position_ids.shape={position_ids.shape}")
+        logger.info(f"len(past_key_values)={len(past_key_values)}")
+        logger.info(f"type(past_key_values)={type(past_key_values)}")
+        for layer_id in range(len(past_key_values)):
+            logger.info(f"recombine key.shape={past_key_values[layer_id][0].shape}")
+            logger.info(f"recombine value.shape={past_key_values[layer_id][1].shape}")
+        if cross_attention_mask is not None:
+            logger.info(f"cross_attention_mask.shape={cross_attention_mask.shape}")
+        logger.info(f"input_length={input_length}")
+        logger.info(f"top_n_tokens={top_n_tokens}")
+        logger.info(f"top_n_tokens_tensor.shape={top_n_tokens_tensor.shape}")
 
         return cls(
             batch_id=batch_id,
@@ -778,7 +793,7 @@ class VlmCausalLMBatch(CausalLMBatch):
             next_token_chooser=next_token_chooser,
             top_n_tokens=top_n_tokens,
             top_n_tokens_tensor=top_n_tokens_tensor,
-            input_length=input_lengths,
+            input_length=input_length,
             pixel_values=None,
             pixel_attention_mask=None,
             image_sizes=None,
