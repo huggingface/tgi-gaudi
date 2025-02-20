@@ -27,7 +27,7 @@ from text_generation_server.utils.weights import (
 if SYSTEM == "rocm":
     from .fused_moe_rocm import grouped_topk
     from vllm.model_executor.layers.fused_moe import fused_topk
-elif SYSTEM != "ipex":
+elif SYSTEM != "ipex" and SYSTEM != "hpu":
     from moe_kernels.fused_moe import fused_topk, grouped_topk
 
 

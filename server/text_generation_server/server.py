@@ -26,14 +26,16 @@ from text_generation_server.utils.tokens import make_tokenizer_optional
 
 try:
     from text_generation_server.models.pali_gemma import PaliGemmaBatch
-    from text_generation_server.models.vlm_causal_lm import (
-        VlmCausalLMBatch,
+    from text_generation_server.models.static_vlm_causal_lm import (
+        StaticVlmCausalLMBatch,
     )
+    from text_generation_server.models.vlm_causal_lm import VlmCausalLMBatch
     from text_generation_server.models.idefics_causal_lm import IdeficsCausalLMBatch
 
     VLM_BATCH_TYPES = {
         PaliGemmaBatch,
         VlmCausalLMBatch,
+        StaticVlmCausalLMBatch,
         IdeficsCausalLMBatch,
     }
 except (ImportError, NotImplementedError):
@@ -102,7 +104,22 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
         return generate_pb2.FilterBatchResponse(batch=filtered_batch.to_pb())
 
     async def Warmup(self, request, context):
-        max_supported_total_tokens = self.model.warmup(request)
+        max_supported_total_tokens = 0        
+        logger.info(f"self.model.batch_type = {self.model.batch_type}")
+        # if (
+        #     self.model.batch_type in VLM_BATCH_TYPES
+        # ):  # Hack, i would rather use kwargs in the `from_pb` call
+        batch = self.model.batch_type.from_pb_processor(
+            request.batch,
+            self.model.tokenizer,
+            self.model.processor,
+            self.model.model.config,
+            self.model.dtype,
+            self.model.device,
+        )
+        max_supported_total_tokens = self.model.warmup(batch)
+        # else:
+        #     max_supported_total_tokens = self.model.warmup(request)
 
         # W/A for the skip tokenizer path
         # We need to call make_tokenizer_optional after the warmup,
@@ -116,7 +133,7 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
     async def Prefill(self, request, context):
         start = time.time_ns()
         if (
-            self.model.batch_type in VLM_BATCH_TYPES
+            self.model.batch_type is VLM_BATCH_TYPES
         ):  # Hack, i would rather use kwargs in the `from_pb` call
             batch = self.model.batch_type.from_pb_processor(
                 request.batch,
@@ -130,8 +147,12 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
             batch = self.model.batch_type.from_pb(
                 request.batch, self.model.tokenizer, self.model.dtype, self.model.device
             )
-
-        generations, next_batch, timings = self.model.generate_token([batch])
+        batches = None
+        if self.model.batch_type is VlmCausalLMBatch:    
+            batches = batch
+        else:
+            batches = [batch]
+        generations, next_batch, timings = self.model.generate_token(batches)
         self.cache.set(next_batch)
 
         return generate_pb2.PrefillResponse(
@@ -143,31 +164,59 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
         )
 
     async def Decode(self, request, context):
-        start = time.time_ns()
-        if len(request.batches) == 0:
-            raise ValueError("Must provide at least one batch")
+        if (
+            self.model.batch_type in VLM_BATCH_TYPES
+        ):
+            start = time.time_ns()
+            if len(request.batches) == 0:
+                raise ValueError("Must provide at least one batch")
 
-        batches = []
-        for batch_pb in request.batches:
-            batch = self.cache.pop(batch_pb.id)
-            if batch is None:
-                raise ValueError(f"Batch ID {batch_pb.id} not found in cache.")
-            batches.append(batch)
+            batches = []
+            for batch_pb in request.batches:
+                batch = self.cache.pop(batch_pb.id)
+                if batch is None:
+                    raise ValueError(f"Batch ID {batch_pb.id} not found in cache.")
+                batches.append(batch)
 
-        if len(batches) == 0:
-            raise ValueError("All batches are empty")
+            if len(batches) == 0:
+                raise ValueError("All batches are empty")
 
-        generations, next_batch, timings = self.model.generate_token(batches)
-        self.cache.set(next_batch)
+            if len(batches) > 1:
+                start_concat = time.time_ns()
+                batch = self.model.batch_type.concatenate(batches)
+                concat_ns = time.time_ns() - start_concat
+            else:
+                batch = batches[0]
+                concat_ns = None
 
-        return generate_pb2.DecodeResponse(
-            generations=[generation.to_pb() for generation in generations],
-            batch=next_batch.to_pb() if next_batch else None,
-            concat_ns=None,
-            forward_ns=timings[0],
-            decode_ns=timings[1],
-            total_ns=time.time_ns() - start,
-        )
+            generations, next_batch, timings = self.model.generate_token(batch)
+            self.cache.set(next_batch) 
+        else:
+            start = time.time_ns()
+            if len(request.batches) == 0:
+                raise ValueError("Must provide at least one batch")
+
+            batches = []
+            for batch_pb in request.batches:
+                batch = self.cache.pop(batch_pb.id)
+                if batch is None:
+                    raise ValueError(f"Batch ID {batch_pb.id} not found in cache.")
+                batches.append(batch)
+
+            if len(batches) == 0:
+                raise ValueError("All batches are empty")
+
+            generations, next_batch, timings = self.model.generate_token(batches)
+            self.cache.set(next_batch)
+
+            return generate_pb2.DecodeResponse(
+                generations=[generation.to_pb() for generation in generations],
+                batch=next_batch.to_pb() if next_batch else None,
+                concat_ns=None,
+                forward_ns=timings[0],
+                decode_ns=timings[1],
+                total_ns=time.time_ns() - start,
+            )
 
 
 def serve(

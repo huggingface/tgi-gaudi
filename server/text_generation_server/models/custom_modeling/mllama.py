@@ -17,9 +17,18 @@
 from typing import Optional, Tuple, List
 
 import torch
+import os
 import torch.utils.checkpoint
 from torch import nn
-import flash_attn_2_cuda
+from text_generation_server.utils.import_utils import SYSTEM
+if SYSTEM == "hpu":
+    try:
+        from habana_frameworks.torch.hpex.kernels import FusedSDPA
+    except ImportError:
+        print("Not using HPU fused scaled dot-product attention kernel.")
+        FusedSDPA = None
+else:
+    import flash_attn_2_cuda
 
 from transformers.activations import ACT2FN
 import torch.nn.functional as F
@@ -233,10 +242,15 @@ class MllamaVisionSdpaAttention(nn.Module):
         query = query.transpose(1, 2)
         key = key.transpose(1, 2)
         value = value.transpose(1, 2)
-
-        attn_output = F.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask
-        )
+        attn_output = None
+        if FusedSDPA is not None:
+            attn_output = FusedSDPA.apply(
+                query, key, value, attention_mask, 0.0, False, None
+            )
+        else:
+            attn_output = F.scaled_dot_product_attention(
+                query, key, value, attn_mask=attention_mask
+            )
 
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(batch_size, q_seq_len, -1)
@@ -671,7 +685,7 @@ class MllamaTextCrossAttention(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
         # hidden_states = hidden_states.unsqueeze(0)
-        # bsz, q_len, _ = hidden_states.size()
+        bsz, q_len, _ = hidden_states.size()
         query_states = self.q_proj(hidden_states)
         query_states = query_states.view(-1, self.num_heads, self.head_size)
         query_states = self.q_norm(query_states)
@@ -698,29 +712,42 @@ class MllamaTextCrossAttention(nn.Module):
         # logger.info(
         #     f"Q: {query_states.shape} -K {key_states.shape} - V{value_states.shape}"
         # )
-        attn_output = flash_attn_2_cuda.varlen_fwd(
-            query_states,
-            key_states,
-            value_states,
-            None,
-            cu_seqlen_q,
-            cu_seqlen_k,
-            None,
-            None,
-            None,  # block_tables
-            None,
-            max_q,
-            max_k,
-            0.0,
-            self.softmax_scale,
-            False,
-            causal,  # Causal
-            -1,  # window_size_left,
-            -1,
-            0.0,  # softcap
-            False,
-            None,
-        )[0]
+        if FusedSDPA is not None:
+            import habana_frameworks.torch.hpu as ht
+            if q_len == 1:
+                use_recompute = True if os.getenv("QUANT_CONFIG", "") else False
+                with ht.sdp_kernel(enable_recompute=use_recompute):
+                    attn_output = FusedSDPA.apply(
+                        query_states, key_states, value_states, None, 0.0, False, None
+                    )
+            else:       
+                with ht.sdp_kernel(enable_recompute=True):
+                    attn_output = FusedSDPA.apply(
+                        query_states, key_states, value_states, None, 0.0, False, None
+                    )
+            attn_output = flash_attn_2_cuda.varlen_fwd(
+                query_states,
+                key_states,
+                value_states,
+                None,
+                cu_seqlen_q,
+                cu_seqlen_k,
+                None,
+                None,
+                None,  # block_tables
+                None,
+                max_q,
+                max_k,
+                0.0,
+                self.softmax_scale,
+                False,
+                causal,  # Causal
+                -1,  # window_size_left,
+                -1,
+                0.0,  # softcap
+                False,
+                None,
+            )[0]
         attn_output = self.o_proj(attn_output.view(-1, self.num_heads * self.head_size))
 
         return attn_output

@@ -72,6 +72,11 @@ class PositionRotaryEmbedding(nn.Module):
             ipex.llm.functional.rotary_embedding(
                 query, key, sin, cos, query.size(-1), True
             )
+        elif SYSTEM == "hpu":
+            from habana_frameworks.torch.hpex.kernels import RotaryPosEmbeddingHelperV2 as FusedRoPE
+
+            query = FusedRoPE.apply(query, cos.unsqueeze(0).unsqueeze(0), sin.unsqueeze(0).unsqueeze(0), None)
+            key = FusedRoPE.apply(key, cos.unsqueeze(0).unsqueeze(0), sin.unsqueeze(0).unsqueeze(0), None)
         else:
             raise ValueError(
                 "Your system seem to be not supported. Please check your install or open an issue at https://github.com/huggingface/text-generation-inference/issues with a clear reproduction."
