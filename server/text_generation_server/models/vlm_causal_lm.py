@@ -83,6 +83,7 @@ LAZY_MODE = int(os.environ.get('PT_HPU_LAZY_MODE', 1))
 PREFILL_WARMUP_BATCH_SIZE_LIST = []
 PREFILL_WARMUP_SEQLEN_LIST = []
 DECODE_WARMUP_BATCH_SIZE_LIST = []
+CROSS_ATTENTION_LAYERS= []
 def round_up(warmup_list:list, num) :
     i = 0
     for i in warmup_list:
@@ -189,6 +190,7 @@ class VlmCausalLMBatch(CausalLMBatch):
     aspect_ratio_ids: Optional[torch.Tensor] = None
     aspect_ratio_mask: Optional[torch.Tensor] = None
     cross_attention_mask: Optional[torch.Tensor] = None
+    prefilling: bool = False
 
     def __init__(self,
         batch_id,
@@ -208,6 +210,7 @@ class VlmCausalLMBatch(CausalLMBatch):
         aspect_ratio_ids: Optional[torch.Tensor] = None,
         aspect_ratio_mask: Optional[torch.Tensor] = None,
         cross_attention_mask: Optional[torch.Tensor] = None,
+        prefilling: Optional[bool] = True,
         ):
         super().__init__(
             batch_id = batch_id,
@@ -228,6 +231,7 @@ class VlmCausalLMBatch(CausalLMBatch):
         self.aspect_ratio_ids = aspect_ratio_ids
         self.aspect_ratio_mask = aspect_ratio_mask
         self.cross_attention_mask = cross_attention_mask
+        self.prefilling = prefilling
 
     @classmethod
     def from_tokenized(
@@ -459,10 +463,67 @@ class VlmCausalLMBatch(CausalLMBatch):
             raise ValueError("KV cache not allocated! Cannot recombine before prefill!")
             # Used for padding
         
+        total_requests = sum(len(b) for b in batches)
+        new_bs = round_up(DECODE_WARMUP_BATCH_SIZE_LIST,total_requests)
+        batch_padding = new_bs - total_requests
+            
+        concat_needed = False
+        only_padding_needed = False
+        if len(batches) > 1:
+            concat_needed = True
+        elif batches[0].prefilling is True:
+            only_padding_needed = True
+        else:
+            return batches[0]
+
+        if only_padding_needed:
+            batch = batches[0]
+            right_padding = MAX_TOTAL_TOKENS - batch.attention_mask.shape[1]
+            batch.input_ids = torch.nn.functional.pad(
+                batch.input_ids, (0, 0, 0, batch_padding), value=0
+            )
+            batch.attention_mask = torch.nn.functional.pad(
+                batch.attention_mask, (0, right_padding, 0, batch_padding), value=0
+            )
+            if batch.position_ids is not None:
+                batch.position_ids = torch.nn.functional.pad(
+                    batch.position_ids, (0, 0, 0, batch_padding), value=batch.position_ids[0, 0].item()
+                )
+            if batch.cross_attention_mask is not None:
+                batch.cross_attention_mask = torch.nn.functional.pad(
+                    batch.cross_attention_mask, (0, 0, 0, 0, 0, right_padding), value=0
+                )
+            if batch.past_key_values is not None:
+                past_key_values_list = list(batch.past_key_values)
+                for layer_id in range(len(batch.past_key_values)):
+                    past_key_value_list = list(batch.past_key_values[layer_id])
+                    if layer_id in CROSS_ATTENTION_LAYERS:
+                        past_key_value_list[0] = torch.nn.functional.pad(
+                            batch.past_key_values[0], (0, 0, 0, 0, 0, 0, 0, batch_padding), value=0
+                        )
+                        past_key_value_list[layer_id][1] = torch.nn.functional.pad(
+                            batch.past_key_values[1], (0, 0, 0, 0, 0, 0, 0, batch_padding), value=0
+                        )
+                        
+                    else:
+                        past_key_value_list[0] = torch.nn.functional.pad(
+                            batch.past_key_values[layer_id][0], (0, 0, 0, right_padding, 0, 0, 0, batch_padding), value=0
+                        )
+                        past_key_value_list[1] = torch.nn.functional.pad(
+                            batch.past_key_values[layer_id][1], (0, 0, 0, right_padding, 0, 0, 0, batch_padding), value=0
+                        )
+                    past_key_values_list[layer_id] = tuple(past_key_value_list)
+                batch.past_key_values = tuple(past_key_values_list)
+            batch.prefilling = False
+            return batch 
+            
         total_batch_size = 0
         max_input_length = 0
         padding_right_offset = 0
-        for batch in batches:
+        dst_idx = -1
+        for i, batch in enumerate(batches):
+            if len(batch) == new_bs:
+                dst_idx = i
             total_batch_size += len(batch)
             max_input_length = max(max_input_length, batch.max_input_length)
             padding_right_offset = max(padding_right_offset, batch.right_padding)
@@ -586,79 +647,54 @@ class VlmCausalLMBatch(CausalLMBatch):
 
         first_past_kvs = batches[0].past_key_values
         _, num_heads, padded_sequence_length, head_dim = first_past_kvs[0][1].shape
+        past_key_values = []
+        for layer_id in range(len(batches[0].past_key_values)):
+            if layer_id in CROSS_ATTENTION_LAYERS:
+                padded_past_keys_shape = batches[0].past_key_values[layer_id][0].shape
+                padded_past_keys_shape[0] = new_bs
+            else:
+                padded_past_keys_shape = (
+                    new_bs,
+                    num_heads,
+                    MAX_TOTAL_TOKENS,
+                    head_dim,
+                )
 
-        padded_past_values_shape = (
-            total_batch_size,
-            num_heads,
-            MAX_TOTAL_TOKENS,
-            head_dim,
-        )
-
-        if batches[0].keys_head_dim_last:
-            padded_past_keys_shape = padded_past_values_shape
-        else:
-            # seq_length is last for BLOOM
-            padded_past_keys_shape = (
-                total_batch_size,
-                num_heads,
-                head_dim,
-                MAX_TOTAL_TOKENS,
-            )
-
-        # Iterate over attention layers
-        # Concatenate past key values layer by layer to allow incremental garbage collection
-        for j in range(len(first_past_kvs)):
-            padded_past_keys = first_past_kvs[j][0].new_zeros(padded_past_keys_shape)
+            padded_past_keys = first_past_kvs[layer_id][0].new_zeros(padded_past_keys_shape)
+            padded_past_values = first_past_kvs[layer_id][1].new_zeros(padded_past_keys_shape)
             start_index = 0
             for batch in batches:
-                past_keys = batch.past_key_values[j][0]
+                past_keys = batch.past_key_values[layer_id][0]
+                past_values = batch.past_key_values[layer_id][1]
                 # Clear reference to the original tensor
-                batch.past_key_values[j][0] = None
+                batch.past_key_values[layer_id] = None
 
                 # Slicing end index for this batch
                 end_index = start_index + len(batch)
                 # We slice the keys to remove the padding from previous batches
-                past_seq_len = batch.max_input_length - 1
                 left_offset = max_input_length - batch.max_input_length
-                # logger.info(f"max_input_length={max_input_length}")
-                # logger.info(f"batch.max_input_length={batch.max_input_length}")
-                # logger.info(f"left_offset={left_offset}")
-                if batch.keys_head_dim_last:
-                    padded_past_keys[start_index:end_index, :, left_offset:batch.max_input_length, :] = (
+                if layer_id in CROSS_ATTENTION_LAYERS:
+                    padded_past_keys[start_index:end_index, :, :, :] = (
                         past_keys[:, :, :, :]
                     )
-                else:
-                    # BLOOM case
-                    padded_past_keys[start_index:end_index, :, :, -past_seq_len:] = (
-                        past_keys[:, :, :, -past_seq_len:]
+                    padded_past_values[start_index:end_index, :, :, :] = (
+                        past_values[:, :, :, :]
                     )
-                del past_keys
+                    
+                else:
+                    padded_past_keys[start_index:end_index, :, left_offset:, :] = (
+                        past_keys[:, :, :, :]
+                    )
+                    padded_past_values[start_index:end_index, :, left_offset:, :] = (
+                        past_values[:, :, :, :]
+                    )
 
                 start_index = end_index
 
-            padded_past_values = first_past_kvs[j][1].new_zeros(
-                padded_past_values_shape
-            )
-            start_index = 0
-            for batch in batches:
-                past_values = batch.past_key_values[j][1]
-                # Clear reference to the original tensor
-                batch.past_key_values[j][1] = None
-
-                # Slicing end index for this batch
-                end_index = start_index + len(batch)
-                # We slice the past values to remove the padding from previous batches
-                past_seq_len = batch.max_input_length - 1
-                left_offset = max_input_length - batch.max_input_length
-                padded_past_values[start_index:end_index, :, left_offset:batch.max_input_length, :] = (
-                    past_values[:, :, :, :]
-                )
-                del past_values
-
-                # Update values
-                start_index = end_index
-
-        past_key_values.append([padded_past_keys, padded_past_values])
+            past_key_values.append([padded_past_keys, padded_past_values])
+        
+        
+        
         batch_id = batches[0].batch_id
         next_token_chooser = HeterogeneousNextTokenChooser.from_pb(
             parameters,
@@ -800,6 +836,7 @@ class VlmCausalLMBatch(CausalLMBatch):
             aspect_ratio_ids=None,
             aspect_ratio_mask=None,
             cross_attention_mask=cross_attention_mask,
+            prefilling=False,
         )
 
 class VlmCausalLM(Model):
@@ -925,6 +962,10 @@ class VlmCausalLM(Model):
                 self.kwargs["flash_attention_recompute"] = True
 
         self.speculate = get_speculate()
+        if model.config.model_type == "mllama":
+            global CROSS_ATTENTION_LAYERS
+            CROSS_ATTENTION_LAYERS = model.config.text_config.cross_attention_layers
+            logger.info(f"cross_attention_layers={CROSS_ATTENTION_LAYERS}")
         super(VlmCausalLM, self).__init__(
             model_id=model_id,
             model=model,
