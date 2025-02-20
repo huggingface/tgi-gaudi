@@ -71,6 +71,13 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 COPY proto proto
 COPY server server
 COPY server/Makefile server/Makefile
+
+# Build vllm-hpu-extension
+RUN git clone https://github.com/HabanaAI/vllm-hpu-extension.git && \
+    cd vllm-hpu-extension && \
+    git apply ../server/0001-Remove-vllm.patch && \
+    pip install . --no-cache-dir
+
 RUN cd server && \
     make gen-server && \
     pip install --no-deps -r requirements.txt && \

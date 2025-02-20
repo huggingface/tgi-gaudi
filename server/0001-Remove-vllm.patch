@@ -1,0 +1,39 @@
+From 77e9978bd9efe883ac58badf77ea8ce9ce79eb69 Mon Sep 17 00:00:00 2001
+From: yuanwu <yuan.wu@intel.com>
+Date: Thu, 20 Feb 2025 02:17:46 +0000
+Subject: [PATCH] Remove vllm
+
+Signed-off-by: yuanwu <yuan.wu@intel.com>
+---
+ vllm_hpu_extension/ops.py | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/vllm_hpu_extension/ops.py b/vllm_hpu_extension/ops.py
+index 7658602..60997eb 100644
+--- a/vllm_hpu_extension/ops.py
++++ b/vllm_hpu_extension/ops.py
+@@ -14,15 +14,15 @@ import habana_frameworks.torch.core as htcore
+ import habana_frameworks.torch.utils.experimental as htexp
+ from vllm_hpu_extension.flags import enabled_flags
+ 
+-from vllm.logger import init_logger
+-from vllm.platforms import current_platform
++#from vllm.logger import init_logger
++#from vllm.platforms import current_platform
+ 
+-logger = init_logger(__name__)
++#logger = init_logger(__name__)
+ 
+ 
+-def is_hpu_gaudi2():
+-    return current_platform.is_hpu() and htexp._get_device_type(
+-    ) == htexp.synDeviceType.synDeviceGaudi2
++#def is_hpu_gaudi2():
++#    return current_platform.is_hpu() and htexp._get_device_type(
++#    ) == htexp.synDeviceType.synDeviceGaudi2
+ 
+ 
+ def get_hpu_gaudi2_scale_factor():
+-- 
+2.34.1
+
