@@ -412,10 +412,16 @@ class VlmCausalLMBatch(CausalLMBatch):
                 chunk_type = chunk.WhichOneof("chunk")
                 if chunk_type == "text":
                     curr_text += chunk.text
+                    logger.info(f"find text chunck111111111111111")
                 elif chunk_type == "image":
                     image = Image.open(BytesIO(chunk.image.data))
                     # TODO unsure about BOS
-                    curr_text += image_text_replacement(config)
+                    if config.model_type == "mllama":
+                        curr_text = image_text_replacement(config) + curr_text
+                    else:
+                        curr_text += image_text_replacement(config)
+                    logger.info(f"image_token={image_text_replacement(config)}")
+                    logger.info(f"find image chunck222222222222")
                     #image_input = processor.image_processor(image, return_tensors="pt")
                     curr_image = image
                     curr_i = i
@@ -423,6 +429,8 @@ class VlmCausalLMBatch(CausalLMBatch):
                     # image_indices.append(i)
                 else:
                     raise RuntimeError(f"Invalid chunk type {chunk_type}")
+            logger.info(f"curr_text={curr_text[-20:]}")
+            logger.info(f"prefix curr_text={curr_text[:20]}")
             texts.append(curr_text)
             if curr_image is not None:
                 images.append(curr_image)
@@ -440,7 +448,6 @@ class VlmCausalLMBatch(CausalLMBatch):
                     dummy_images = [images[0]] * missing_inputs
                 texts += dummy_inputs
                 images += dummy_images
-
         processor_output = processor(images,
                                      texts,
                                      truncation=True,
@@ -448,12 +455,14 @@ class VlmCausalLMBatch(CausalLMBatch):
                                      add_special_tokens=r.add_special_tokens,
                                      return_tensors="pt",
                                      padding="longest")
+        logger.info(f"""processor_output={processor_output}""")
         if "input_ids" in processor_output:
             batch_tokenized_inputs.update({"input_ids" : processor_output["input_ids"]})
         if "attention_mask" in processor_output:
             batch_tokenized_inputs.update({"attention_mask" : processor_output["attention_mask"]})
         if "cross_attention_mask" in processor_output:
             batch_tokenized_inputs.update({"cross_attention_mask" : processor_output["cross_attention_mask"]})
+            logger.info(f"cross_attention_mask.shape={processor_output['cross_attention_mask'].shape}")
         if "pixel_values" in processor_output:
             image_inputs.update({"pixel_values" : processor_output["pixel_values"]})
         if "pixel_attention_mask" in processor_output:
@@ -687,9 +696,10 @@ class VlmCausalLMBatch(CausalLMBatch):
             ]
             
             if batch.cross_attention_mask is not None:
-                cross_attention_mask_shape = batch.cross_attention_mask.shape
+                cross_attention_mask_shape = list(batch.cross_attention_mask.shape)
                 cross_attention_mask_shape[1] = MAX_TOTAL_TOKENS
                 cross_attention_mask_shape[0] = new_bs
+                cross_attention_mask_shape = torch.Size(cross_attention_mask_shape)
                 if cross_attention_mask is None:
                     cross_attention_mask = batch.cross_attention_mask.new_zeros(
                         cross_attention_mask_shape,
