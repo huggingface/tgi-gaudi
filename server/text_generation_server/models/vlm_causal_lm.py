@@ -272,19 +272,6 @@ class VlmCausalLMBatch(CausalLMBatch):
                     )
                 past_key_values_list[layer_id] = tuple(past_key_value_list)
             self.past_key_values = tuple(past_key_values_list)
-        logger.info(f"padding_process attention_mask.shape={self.attention_mask.shape}")
-        logger.info(f"padding_process position_ids.shape={self.position_ids.shape}") 
-        logger.info(f"padding_process batch.input_length={self.input_length}") 
-        logger.info(f"padding_process batch.right_padding={self.right_padding}")
-        logger.info(f"padding_process batch.seq_length={self.seq_length}")
-        logger.info(f"""padding_process batch.input_ids.shape={self.input_ids.shape}""") 
-        #for i in range(self.input_ids.shape[1]):
-        #    logger.info(f"padding_process i = {i} batch.input_ids[{i}]={self.input_ids[0][i]}")
-        logger.info(f"padding_process top_n_tokens={self.top_n_tokens}")
-        logger.info(f"padding_process top_n_tokens_tensor={self.top_n_tokens_tensor}")    
-        # for layer_id in range(len(self.past_key_values)):
-        #     logger.info(f"padding_process key.shape={self.past[layer_id][0].shape}")
-        #     logger.info(f"padding_process value.shape={self.past[layer_id][1].shape}")
    
         self.prefilling = False
         self.input_length = self.input_length 
@@ -340,8 +327,6 @@ class VlmCausalLMBatch(CausalLMBatch):
                 left_padding = bucket_size - input_len
 
         input_ids = tokenized_inputs["input_ids"]
-        logger.info(f"input_ids.shape={input_ids.shape}")
-        logger.info(f"input_ids={input_ids}")
         attention_mask = tokenized_inputs["attention_mask"]
         cross_attention_mask = tokenized_inputs.get("cross_attention_mask", None)
         # Allocate space for first token
@@ -349,7 +334,6 @@ class VlmCausalLMBatch(CausalLMBatch):
             input_ids = torch.nn.functional.pad(
                 input_ids, (left_padding, 1), value=tokenizer.pad_token_id
             )
-            logger.info(f"input_ids.shape={input_ids.shape}")
             attention_mask = torch.nn.functional.pad(
                 attention_mask, (left_padding, 1), value=0
             )
@@ -410,7 +394,6 @@ class VlmCausalLMBatch(CausalLMBatch):
                 chunk_type = chunk.WhichOneof("chunk")
                 if chunk_type == "text":
                     curr_text += chunk.text
-                    logger.info(f"find text chunck111111111111111")
                 elif chunk_type == "image":
                     image = Image.open(BytesIO(chunk.image.data))
                     # TODO unsure about BOS
@@ -418,17 +401,11 @@ class VlmCausalLMBatch(CausalLMBatch):
                         curr_text = image_text_replacement(config) + curr_text
                     else:
                         curr_text += image_text_replacement(config)
-                    logger.info(f"image_token={image_text_replacement(config)}")
-                    logger.info(f"find image chunck222222222222")
-                    #image_input = processor.image_processor(image, return_tensors="pt")
                     curr_image = image
                     curr_i = i
-                    # image_inputs.append(image_input)
-                    # image_indices.append(i)
                 else:
                     raise RuntimeError(f"Invalid chunk type {chunk_type}")
-            logger.info(f"curr_text={curr_text[-20:]}")
-            logger.info(f"prefix curr_text={curr_text[:20]}")
+
             texts.append(curr_text)
             if curr_image is not None:
                 images.append(curr_image)
@@ -453,14 +430,12 @@ class VlmCausalLMBatch(CausalLMBatch):
                                      add_special_tokens=r.add_special_tokens,
                                      return_tensors="pt",
                                      padding="longest")
-        logger.info(f"""processor_output={processor_output}""")
         if "input_ids" in processor_output:
             batch_tokenized_inputs.update({"input_ids" : processor_output["input_ids"]})
         if "attention_mask" in processor_output:
             batch_tokenized_inputs.update({"attention_mask" : processor_output["attention_mask"]})
         if "cross_attention_mask" in processor_output:
             batch_tokenized_inputs.update({"cross_attention_mask" : processor_output["cross_attention_mask"]})
-            logger.info(f"cross_attention_mask.shape={processor_output['cross_attention_mask'].shape}")
         if "pixel_values" in processor_output:
             image_inputs.update({"pixel_values" : processor_output["pixel_values"]})
         if "pixel_attention_mask" in processor_output:
@@ -543,13 +518,11 @@ class VlmCausalLMBatch(CausalLMBatch):
         if len(batches) > 1:
             concat_needed = True
         elif batches[0].prefilling:
-            logger.info(f"prefilling padding++++++++++++++")
             only_padding_needed = True
             batch = batches[0]
             batch.padding_process(pad_token_id)
             return batch
         else:
-            logger.info(f"do nothing prefilling batch+++++++++++")
             return batches[0]
 
         if only_padding_needed:
@@ -602,7 +575,6 @@ class VlmCausalLMBatch(CausalLMBatch):
             total_batch_size += len(batch)
             max_input_length = max(max_input_length, batch.input_length) 
             padding_right_offset = max(padding_right_offset, batch.right_padding)
-            logger.info(f"padding_right_offset={padding_right_offset}")
 
         # Batch attributes
         requests = []
@@ -649,16 +621,9 @@ class VlmCausalLMBatch(CausalLMBatch):
             if input_ids is None:
                 input_ids = batch.input_ids.new_empty((new_bs, MAX_TOTAL_TOKENS))
             # # Copy to correct indices
-            # if batch.prefilling:
-            #     batch.input_ids = torch.index_select(batch.input_ids, 1, batch.token_idx - 1)
-                
+
             left_offset = max_input_length - batch.input_ids.shape[1]
             right_padding = MAX_TOTAL_TOKENS - max_input_length
-            logger.info(f"max_input_length={max_input_length}")
-            logger.info(f"batch.input_length={batch.input_length}")
-            logger.info(f"left_offset={left_offset}")
-            logger.info(f"batch.input_ids.shape={batch.input_ids.shape}")
-            logger.info(f"input_ids.shape={input_ids.shape}")
             input_ids[start_index:end_index, left_offset:-right_padding] = batch.input_ids[:len(batch)]
 
             # Create padded tensor
@@ -666,7 +631,6 @@ class VlmCausalLMBatch(CausalLMBatch):
                 attention_mask = batch.attention_mask.new_zeros(
                     (new_bs, MAX_TOTAL_TOKENS),
                 )
-                logger.info(f"allocate attention_mask.shape={attention_mask.shape}")
 
             if top_n_tokens_tensor is None:
                 top_n_tokens_tensor = batches[0].top_n_tokens_tensor.new_zeros(
@@ -674,17 +638,6 @@ class VlmCausalLMBatch(CausalLMBatch):
                 )
             top_n_tokens_tensor[start_index:end_index] = batch.top_n_tokens_tensor
 
-            # We need to slice the attention mask to remove padding from previous steps
-            # and to remove unused allocated space
-            # batch_left_offset = (
-            #     batch.attention_mask.shape[1]
-            #     - batch.max_input_length
-            #     - batch.padding_right_offset
-            # )
-            logger.info(f"left_offset={left_offset}")
-            logger.info(f"max_input_length={max_input_length}")
-            logger.info(f"padding_right_offset={padding_right_offset}")
-            logger.info(f"batch.max_input_length={batch.max_input_length}")
             attention_mask[
                 start_index:end_index,
                 left_offset:-right_padding,
@@ -692,7 +645,7 @@ class VlmCausalLMBatch(CausalLMBatch):
                 :len(batch),
                 :,
             ]
-            
+
             if batch.cross_attention_mask is not None:
                 cross_attention_mask_shape = list(batch.cross_attention_mask.shape)
                 cross_attention_mask_shape[1] = MAX_TOTAL_TOKENS
@@ -709,7 +662,7 @@ class VlmCausalLMBatch(CausalLMBatch):
                     :len(batch),
                     :,
                 ]
-                
+
             # Create empty tensor
             # position_ids is always of shape [batch_size, 1]
             if position_ids is None:
@@ -720,7 +673,6 @@ class VlmCausalLMBatch(CausalLMBatch):
             # BLOOM Keys:   [batch_size * num_heads, head_dim, seq_length]
             # BLOOM Values: [batch_size * num_heads, seq_length, head_dim]
             # And ensure that we can update tensors in-place
-            logger.info(f"past_key_values.type={type(batch.past_key_values)}")
             if isinstance(batch.past_key_values, tuple):
                 batch.past_key_values = [
                     [t.view(batch.batch_size, -1, *t.shape[-2:]) for t in layer]
@@ -730,14 +682,9 @@ class VlmCausalLMBatch(CausalLMBatch):
                 for layer in batch.past_key_values:
                     for k, t in enumerate(layer):
                         layer[k] = t.view(batch.batch_size, -1, *t.shape[-2:])
-            logger.info(f"past_key_values.type={type(batch.past_key_values)}")
-
-            # Add eventual padding tokens that were added while concatenating
-            # max_tokens += batch.max_tokens + (
-            #     max_input_length - batch.max_input_length
-            # ) * len(batch)
 
             start_index = end_index
+
         first_past_kvs = batches[0].past_key_values
         _, num_heads, padded_sequence_length, head_dim = first_past_kvs[0][1].shape
         past_key_values = []
@@ -758,7 +705,6 @@ class VlmCausalLMBatch(CausalLMBatch):
             padded_past_values = first_past_kvs[layer_id][1].new_zeros(padded_past_keys_shape)
             start_index = 0
             for batch in batches:
-                logger.info(f"past_key_values.type={type(batch.past_key_values)}")
                 past_keys = batch.past_key_values[layer_id][0]
                 past_values = batch.past_key_values[layer_id][1]
                 # Clear reference to the original tensor
@@ -799,122 +745,8 @@ class VlmCausalLMBatch(CausalLMBatch):
             quantization_enabled=hq_env.is_quantization_enabled,
         )
         input_length = max_input_length
-        
-        
-        # total_requests = sum(len(b) for b in batches)
-        # new_bs = total_requests
-        # if is_warmup is False :
-        #     new_bs = round_up(DECODE_WARMUP_BATCH_SIZE_LIST, total_requests)
-        # device = batches[0].input_ids.device
-
-        # batch_id = batches[0].batch_id
-        # input_lengths = [b.input_length for b in batches]
-        # max_input_length = max(input_lengths)
-        # logger.info(f"max_input_length:{max_input_length}")
-        # offsets = [max_input_length - b.input_length for b in batches]
-        # logger.info(f"offsets:{offsets}")
-
-        # cur_padding = [b.right_padding for b in batches]
-        # logger.info(f"cur_padding={cur_padding}")
-        # # For prefill there is a space allocated only for first token
-        # # Need to add padding to the max total tokens before first decode
-
-        # moves_needed = [total_requests - len(b) if b.batch_size == new_bs else total_requests for b in batches]
-        # dst_batch_idx = min(enumerate(moves_needed), key=lambda idx_val: idx_val[1])[0]
-        # reshape = (batches[dst_batch_idx].batch_size < new_bs)
-
-        # # TODO: Add support for changing max seq len, i.e. due to output length bucketing
-        # # FIXME: max_seq_len for non optimized code
-        # if len(batches) > 1:
-        #     scenario = 'CONCAT'
-        # elif reshape:
-        #     scenario = 'RESHAPE'
-        # elif cur_padding[dst_batch_idx] <= 0:
-        #     scenario = 'SHIFT'
-        #     offsets = [biggest_single_chunk(b.max_input_length - max_input_length) for b in batches]
-        #     logger.info(f"offset:{offsets}")
-        #     max_input_length = max_input_length + offsets[dst_batch_idx]
-        #     logger.info(f"max_input_length:{max_input_length}")
-        # else:
-        #     # Nothing to do
-        #     return batches[0]
-
-        # logger.info(
-        #     f'scenario:{scenario}'
-        #     f'bs:{[b.batch_size for b in batches]}->{new_bs}'
-        #     f' reqs:{[len(b) for b in batches]}'
-        #     f' offsets:{offsets}'
-        #     f' input_lengths:{input_lengths}'
-        #     f' cur_padding:{cur_padding}'
-        #     f' dst_batch:{dst_batch_idx}')
-
-        # grouped_requests = [[req for req in batch.requests] for batch in batches]
-        # flat_requests = list(itertools.chain(*grouped_requests))
-
-        # for i in range(len(batches)):
-        #     target_bs = new_bs if i == dst_batch_idx else batches[i].batch_size
-        #     batches[i].merge_kv_cache_if_needed(target_bs, offsets[i])
-        #     batches[i].realign(target_bs, offsets[i], pad_token_id)
-        #     batches[i].split_kv_cache_if_needed(i == dst_batch_idx)
-        # batches[dst_batch_idx].expand_bs(new_bs)
-        # batches[dst_batch_idx].move_data([batches[i] for i in range(len(batches)) if i != dst_batch_idx])
-
-        # top_n_tokens = [r.data.top_n_tokens for r in flat_requests]
-        # top_n_tokens_tensor = torch.tensor(top_n_tokens, device=device, dtype=torch.int64)
-
-        # parameters = [r.data.parameters for r in flat_requests]
-        # # append the dummy parameters for dummy requests
-        # batch_size = batches[dst_batch_idx].batch_size
-        # parameters = pad_next_token_chooser_parameters(parameters, batch_size)
-
-        # # update past grammar states
-        # fsm_grammar_states = [0] * batch_size
-        # for batch in batches:
-        #     for i, req in enumerate(batch.requests):
-        #         fsm_grammar_states[req.idx] = batch.next_token_chooser.fsm_grammar_states[i]
-
-        # next_token_chooser = HeterogeneousNextTokenChooser.from_pb(
-        #     parameters,
-        #     batches[dst_batch_idx].next_token_chooser.dtype,
-        #     batches[dst_batch_idx].next_token_chooser.device,
-        #     batches[dst_batch_idx].next_token_chooser.tokenizer,
-        #     fsm_grammar_states,
-        #     quantization_enabled=hq_env.is_quantization_enabled,
-        # )
-
-        # input_ids = batches[dst_batch_idx].input_ids
-        # attention_mask = batches[dst_batch_idx].attention_mask
-        # position_ids = batches[dst_batch_idx].position_ids
-        # past_key_values = batches[dst_batch_idx].past_key_values
-        # pixel_values = None
-        # pixel_attention_mask = None
-        # image_sizes = None
-        # aspect_ratio_ids = None
-        # aspect_ratio_mask = None
-        # cross_attention_mask = batches[dst_batch_idx].cross_attention_mask
-        # input_length = max_input_length
 
         htorch.core.mark_step()
-        # if past_key_values is not None:
-        #     for layer_id in range(len(past_key_values)):
-        #         logger.info(f"decode key.shape={past_key_values[layer_id][0].shape}")
-        #         logger.info(f"decode value.shape={past_key_values[layer_id][1].shape}")
-        logger.info(f"recombine+++++++++++++++++++++")
-        logger.info(f"batch_id={batch_id}")
-        logger.info(f"input_ids.shape={input_ids.shape}")
-        logger.info(f"attention_mask.shape={attention_mask.shape}")
-        logger.info(f"position_ids.shape={position_ids.shape}")
-        logger.info(f"len(past_key_values)={len(past_key_values)}")
-        logger.info(f"type(past_key_values)={type(past_key_values)}")
-        # for layer_id in range(len(past_key_values)):
-        #     logger.info(f"recombine key.shape={past_key_values[layer_id][0].shape}")
-        #     logger.info(f"recombine value.shape={past_key_values[layer_id][1].shape}")
-        if cross_attention_mask is not None:
-            logger.info(f"cross_attention_mask.shape={cross_attention_mask.shape}")
-        logger.info(f"input_length={input_length}")
-        logger.info(f"top_n_tokens={top_n_tokens}")
-        logger.info(f"top_n_tokens_tensor={top_n_tokens_tensor}")
-        logger.info(f"recombine----------------")
 
         return cls(
             batch_id=batch_id,
@@ -1065,7 +897,6 @@ class VlmCausalLM(Model):
             CROSS_ATTENTION_LAYERS = model.config.text_config.cross_attention_layers
             BASE_IMAGE_TOKENS = 0
             
-            logger.info(f"cross_attention_layers={CROSS_ATTENTION_LAYERS}")
         super(VlmCausalLM, self).__init__(
             model_id=model_id,
             model=model,
@@ -1196,10 +1027,7 @@ class VlmCausalLM(Model):
             "token_idx": batch.token_idx,
             "pixel_values": batch.pixel_values,
         }
-        logger.info(f"forward+++++++++++++++++++++")
-        logger.info(f"token_idx: {batch.token_idx}")
-        logger.info(f"input_ids.shape: {batch.input_ids.shape}")
-        logger.info(f"attention_mask.shape: {batch.attention_mask.shape}")
+
         if self.model.config.model_type == "mllama":
             kwargs["aspect_ratio_ids"] = batch.aspect_ratio_ids
             kwargs["aspect_ratio_mask"] = batch.aspect_ratio_mask
@@ -1214,247 +1042,22 @@ class VlmCausalLM(Model):
 
         if self.has_position_ids:
             kwargs["position_ids"] = batch.position_ids
-            logger.info(f"position_ids.shape: {batch.position_ids.shape}")
         if bypass_hpu_graph != None:
             hpu_kwargs["bypass_hpu_graphs"] = bypass_hpu_graph
 
         kwargs.update(self.kwargs)
         model_inputs = self.model.prepare_inputs_for_generation(**kwargs)
-        #htorch.core.mark_step()
-        logger.info(f"batch.input_ids: {batch.input_ids}")
-        logger.info(f"batch.input_ids.shape: {batch.input_ids.shape}")
-        logger.info(f"after prepare attention_mask: {model_inputs['attention_mask'].shape}")
-        logger.info(f"after prepare position_ids.shape: {batch.position_ids.shape}")
-        logger.info(f"forward--------------------")
-        if batch.past_key_values is not None:
-            # for layer_id in range(len(batch.past_key_values)):
-            #     logger.info(f"decode key.shape={batch.past_key_values[layer_id][0].shape}")
-            #     logger.info(f"decode value.shape={batch.past_key_values[layer_id][1].shape}")
 
+        if batch.past_key_values is not None:
             return self.model.forward(**model_inputs, **hpu_kwargs)
         else:
             outputs = self.model.forward(**model_inputs, **hpu_kwargs)
-            # for layer_id in range(len(outputs.past_key_values)):
-            #     logger.info(f"prefill key.shape={outputs.past_key_values[layer_id][0].shape}")
-            #     logger.info(f"prefill value.shape={outputs.past_key_values[layer_id][1].shape}")
             return outputs.logits, outputs.past_key_values
 
     @tracer.start_as_current_span("generate_token")
     def generate_token(
         self, batches: list[VlmCausalLMBatch], is_warmup: bool = False
     ) -> Tuple[List[Generation], Optional[VlmCausalLMBatch], Tuple[int, int]]:
-        
-        #start = time.time_ns()
-        # slice the attention mask to the correct shape
-        #attention_mask = batch.attention_mask[:, : -batch.padding_right_offset]
-        # Execute batch
-        
-        # if prefill:
-        #     # no right padding for prefill
-        #     token_idx = torch.tensor(batch.attention_mask.shape[-1] - 1).to(self.device)
-        #     batch.logits, batch.past = self.forward(
-        #         batch,
-        #         token_idx,
-        #         bypass_hpu_graph=batch.prefill and self.limit_hpu_graph if self.enable_hpu_graph else None,
-        #     )
-
-        # logits, speculative_logits, past = self.forward(
-        #     batch,
-        #     bypass_hpu_graph=batch.prefilling and self.limit_hpu_graph if self.enable_hpu_graph else None,
-        # )
-
-        # # Results
-        # generations: List[Generation] = []
-        # stopped = True
-
-        # # Speculation is not active for causal
-        # accepted_ids = torch.ones_like(batch.input_ids)[:, 0]
-        # batch_top_token_ids, batch_top_token_logprobs = batch_top_tokens(
-        #     batch.top_n_tokens,
-        #     batch.top_n_tokens_tensor,
-        #     torch.log_softmax(logits[:, -1], -1),
-        #     accepted_ids,
-        # )
-
-        # start_decode = time.time_ns()
-
-        # # Zipped iterator
-        # iterator = zip(
-        #     batch.requests,
-        #     batch.input_lengths,
-        #     batch.prefix_offsets,
-        #     batch.read_offsets,
-        #     logits,
-        #     batch.next_token_choosers,
-        #     batch.stopping_criterias,
-        #     batch.all_input_ids,
-        #     batch.top_n_tokens,
-        #     batch_top_token_ids,
-        #     batch_top_token_logprobs,
-        # )
-
-        # # For each member of the batch
-        # for i, (
-        #     request,
-        #     input_length,
-        #     prefix_offset,
-        #     read_offset,
-        #     logits,
-        #     next_token_chooser,
-        #     stopping_criteria,
-        #     all_input_ids,
-        #     top_n_tokens,
-        #     top_token_ids,
-        #     top_token_logprobs,
-        # ) in enumerate(iterator):
-        #     # Select next token
-        #     next_token_id, logprobs = next_token_chooser(
-        #         all_input_ids.view(1, -1), logits[-1:, :]
-        #     )
-
-        #     # Append next token to all tokens
-        #     all_input_ids = torch.cat([all_input_ids, next_token_id])
-        #     new_input_length = input_length + 1
-
-        #     # Generated token
-        #     next_token_logprob = logprobs[-1, next_token_id]
-        #     next_token_id_squeezed = next_token_id.squeeze()
-        #     next_token_text, prefix_offset, read_offset = self.decode_token(
-        #         all_input_ids[:, 0], prefix_offset, read_offset
-        #     )
-
-        #     # Evaluate stopping criteria
-        #     stop, reason = stopping_criteria(
-        #         next_token_id_squeezed,
-        #         next_token_text,
-        #     )
-
-        #     if not stop:
-        #         stopped = False
-
-        #     # Shard generations
-        #     # All generations will be appended in the rust sharded client
-        #     if i % self.world_size == self.rank:
-        #         if stop:
-        #             # Decode generated tokens
-        #             output_text, _, _ = self.decode_token(
-        #                 all_input_ids[:, 0],
-        #                 prefix_offset=len(all_input_ids)
-        #                 - stopping_criteria.current_tokens
-        #                 - 1,
-        #                 read_offset=len(all_input_ids)
-        #                 - stopping_criteria.current_tokens,
-        #                 skip_special_tokens=True,
-        #             )
-        #             # Get seed
-        #             if isinstance(next_token_chooser.choice, Sampling):
-        #                 seed = next_token_chooser.choice.seed
-        #             else:
-        #                 seed = None
-
-        #             generated_text = GeneratedText(
-        #                 output_text, stopping_criteria.current_tokens, reason, seed
-        #             )
-        #         else:
-        #             generated_text = None
-
-        #         # Prefill
-        #         if stopping_criteria.current_tokens == 1 and request.prefill_logprobs:
-        #             # Remove generated token to only have prefill and add nan for first prompt token
-        #             prefill_logprobs = [float("nan")] + torch.log_softmax(
-        #                 logits, -1
-        #             ).gather(1, all_input_ids[1:]).squeeze(1)[
-        #                 -new_input_length:-1
-        #             ].tolist()
-        #             prefill_token_ids = all_input_ids[-new_input_length:-1]
-        #             prefill_texts = self.tokenizer.batch_decode(
-        #                 prefill_token_ids,
-        #                 clean_up_tokenization_spaces=False,
-        #                 skip_special_tokens=False,
-        #             )
-        #             prefill_tokens = Tokens(
-        #                 prefill_token_ids,
-        #                 prefill_logprobs,
-        #                 prefill_texts,
-        #                 is_special=[],
-        #             )
-        #         else:
-        #             prefill_tokens = None
-
-        #         if top_n_tokens > 0:
-        #             all_top_tokens = []
-        #             for top_token_ids, top_token_logprobs in zip(
-        #                 top_token_ids, top_token_logprobs
-        #             ):
-        #                 toptoken_texts = self.tokenizer.batch_decode(
-        #                     top_token_ids,
-        #                     clean_up_tokenization_spaces=False,
-        #                     skip_special_tokens=False,
-        #                 )
-        #                 special_toptokens = [
-        #                     token_id in self.all_special_ids
-        #                     for token_id in top_token_ids
-        #                 ]
-        #                 top_tokens = Tokens(
-        #                     top_token_ids,
-        #                     top_token_logprobs,
-        #                     toptoken_texts,
-        #                     special_toptokens,
-        #                 )
-        #                 all_top_tokens.append(top_tokens)
-        #             top_tokens = all_top_tokens
-        #         else:
-        #             top_tokens = None
-
-        #         generation = Generation(
-        #             request.id,
-        #             prefill_tokens,
-        #             Tokens(
-        #                 [next_token_id_squeezed],
-        #                 [next_token_logprob],
-        #                 [next_token_text],
-        #                 [next_token_id_squeezed.item() in self.all_special_ids],
-        #             ),
-        #             generated_text,
-        #             top_tokens,
-        #         )
-
-        #         generations.append(generation)
-
-        #     # Update values
-        #     batch.next_token_choosers[i] = batch.next_token_choosers[i].advance_grammar(
-        #         next_token_id_squeezed.item()
-        #     )
-        #     batch.input_ids[i, 0] = next_token_id
-        #     batch.all_input_ids[i] = all_input_ids
-        #     batch.input_lengths[i] = new_input_length
-        #     batch.prefix_offsets[i] = prefix_offset
-        #     batch.read_offsets[i] = read_offset
-        #     batch.max_input_length = max(batch.max_input_length, new_input_length)
-
-        # # We finished all generations in the batch; there is no next batch
-        # if stopped:
-        #     forward_ns = start_decode - start
-        #     decode_ns = time.time_ns() - start_decode
-        #     return generations, None, (forward_ns, decode_ns)
-
-        # # Slice unused values from prefill
-        # batch.input_ids = batch.input_ids[:, :1]
-
-        # # Update attention_mask as we added a new token to input_ids
-        # batch.attention_mask[:, -batch.padding_right_offset] = 1
-        # # Decrease right offset
-        # batch.padding_right_offset -= 1
-
-        # # Update position_ids
-        # batch.position_ids = batch.position_ids[:, -1:] + 1
-
-        # # Update past key values
-        # batch.past_key_values = past
-
-        # forward_ns = start_decode - start
-        # decode_ns = time.time_ns() - start_decode
-        # return generations, batch, (forward_ns, decode_ns)
 
         start = time.time_ns()
         # Results
@@ -1472,11 +1075,9 @@ class VlmCausalLM(Model):
                     # no right padding for prefill
                     token_idx_scalar = batch.attention_mask.shape[-1] - 1
                     token_idx = torch.tensor(token_idx_scalar).to(self.device)
-                    logger.info(f"generate_token token_idx={token_idx}")
                 else:
                     token_idx_scalar = batch.attention_mask.shape[-1] - batch.right_padding
                     token_idx = torch.tensor(token_idx_scalar).to(self.device)
-                    logger.info(f"generate_token decode token_idx={token_idx}")
 
                 # Select next token
                 input_length = batch.input_length
@@ -1518,7 +1119,6 @@ class VlmCausalLM(Model):
                 htorch.core.mark_step()
 
                 # Add new token into input_ids
-                logger.info(f"token_idx={token_idx}")
                 batch.input_ids.index_copy_(1, token_idx, next_token_ids.unsqueeze(1))
 
                 # Update attention_mask as we added a new token to input_ids
@@ -1534,13 +1134,11 @@ class VlmCausalLM(Model):
 
                 # Adjust lengths
                 batch.input_length += 1
-                logger.info(f"generate_token input_length={batch.input_length}")
                 # Update position_ids
                 if prefill:
                     batch.position_ids = torch.index_select(batch.position_ids, 1, token_idx - 1) + 1
                 else:
                     batch.position_ids += 1
-                logger.info(f"generate_token position_ids={batch.position_ids}")
                 # Update past key values
                 if prefill:
                     batch.past_key_values = past
@@ -1549,7 +1147,6 @@ class VlmCausalLM(Model):
 
         # Stage 2. Prepare new batch for speculative scheduling
         if len(batches) > 1:
-            logger.info(f"111111111111111111111111")
             batch = self.batch_type.concatenate(batches, self.tokenizer.pad_token_id, is_warmup)
         else:
             batch = batches[0]
@@ -1558,7 +1155,6 @@ class VlmCausalLM(Model):
 
         # Check if we need to do any bookkeeping first
         if not prefill:
-            logger.info(f"222222222222222222222")
             batch = self.batch_type.recombine([batch], self.tokenizer.pad_token_id, is_warmup)
 
         scenario = 'PREFILL' if prefill else 'GENERATE'
@@ -1577,8 +1173,7 @@ class VlmCausalLM(Model):
                 batch,
                 bypass_hpu_graph=prefill and self.limit_hpu_graph if self.enable_hpu_graph else None,
             )
-            logger.info(f"+++++++++++++++++++batch.past.type={type(batch.past)}")
-            #batch.padding_process(self.tokenizer.pad_token_id)
+
         elif all([req.stopping_criteria.max_new_tokens == 1 for req in batch.requests]):
             # Don't schedule next forward if max_new_tokens for all requests equals 1
             # - we've already generated the first and only needed token in the prefill phase
@@ -1603,7 +1198,6 @@ class VlmCausalLM(Model):
 
         # Stage 3. Finish and return previous generations
         stopped = len(requests_to_generate) > 0
-        logger.info(f"""stopped={stopped}""")
         for prev_batch in prev_batches:
             prev_batch['next_token_logprobs'] = prev_batch['next_token_logprobs'].tolist()
             prev_batch['next_token_ids_cpu'] = prev_batch['next_token_ids'].cpu()
@@ -1786,9 +1380,7 @@ class VlmCausalLM(Model):
 
         try:
             # max prefill batch size warmup
-            logger.info(f"warmup max prefill batch size+++++++++++")
             _, prefill_batch, _ = self.generate_token([batch], is_warmup=True)
-            logger.info(f"warmup max prefill batch size-------------")
         except:
             raise RuntimeError(
                 f"Not enough memory to handle {len(batch.input_ids)} prefill tokens. "
@@ -1826,12 +1418,8 @@ class VlmCausalLM(Model):
             for batch_size in PREFILL_WARMUP_BATCH_SIZE_LIST :
                 for seq_len in PREFILL_WARMUP_SEQLEN_LIST :
                     batch = self.generate_warmup_batch(request, seq_len, batch_size, is_warmup=True)
-                    logger.info(f"warmup prefill batch size+++++++++++")
                     _, prefill_batch, _ = self.generate_token([batch], is_warmup=True)
-                    logger.info(f"warmup prefill batch size------------")
-                    logger.info(f"warmup decode batch size+++++++++++++++")
                     _, decode_batch, _ = self.generate_token([prefill_batch], is_warmup=True)
-                    logger.info(f"warmup decode batch size----------------")
 
                 DECODE_WARMUP_BATCH_SIZE_LIST.append(batch_size)
 
@@ -1854,26 +1442,16 @@ class VlmCausalLM(Model):
             )
 
         max_decode_batch_size = math.floor(MAX_BATCH_TOTAL_TOKENS / MAX_TOTAL_TOKENS)
-        logger.info(f"""++++++++++++++++++++++++++max_decode_batch_size={max_decode_batch_size}""")
         batch_size = max_prefill_batch_size * 2
         # Decode warmup with bigger batch_size
         try:
             if DECODE_WARMUP_BATCH_SIZE_LIST[-1] < max_decode_batch_size and batch_size <= max_decode_batch_size:
                 batches = []
-                # logger.info(f"""++++++++++++++++++++++++++generate batch_size={batch_size}""")
-                # for i in range(int(batch_size/max_prefill_batch_size)) :
-                #     batch = self.generate_warmup_batch(request, PREFILL_WARMUP_SEQLEN_LIST[0], DECODE_WARMUP_BATCH_SIZE_LIST[-1], is_warmup=True)
-                #     _, prefill_batch, _ = self.generate_token([batch], is_warmup=True)
-                #     batches.append(prefill_batch)
-                # logger.info(f"""-----------------------generate batch_size={batch_size}""")
                 while batch_size <= max_decode_batch_size:
-                    logger.info(f"""++++++++++++++++++++++++++batch_size={batch_size}""")
                     for i in range(int(batch_size/max_prefill_batch_size)) :
                         batch = self.generate_warmup_batch(request, PREFILL_WARMUP_SEQLEN_LIST[0], max_prefill_batch_size, is_warmup=True)
                         _, prefill_batch, _ = self.generate_token([batch], is_warmup=True)
                         batches.append(prefill_batch)
-                    logger.info(f"""--------------------------batch_size={batch_size}""")
-
 
                     _, decode_batch, _ = self.generate_token(batches, is_warmup=True)
                     DECODE_WARMUP_BATCH_SIZE_LIST.append(batch_size)

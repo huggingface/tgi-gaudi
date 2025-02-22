@@ -237,16 +237,12 @@ class LlavaNextForConditionalGeneration(GaudiLlavaNextForConditionalGeneration):
                 elif past_key_values is not None:
                     seq_len = input_ids.shape[1]
                     pad_len = seq_len - token_idx.item()
-                    logger.info(f"llava token_idx: {token_idx.item()} pad_len: {pad_len}")
                     input_ids = torch.index_select(input_ids, 1, token_idx - 1)
-                    logger.info(f"""llava input_ids: {input_ids}""")
                     # Retrieve the first layer to inspect the logits and mask out the hidden states
                     # that are set to 0
                     first_layer_past_key_value = past_key_values[0][0][:, :, :, 0]
-                    logger.info(f"""llava first_layer_past_key_value: {first_layer_past_key_value}""")
                     # Sum all dimensions of head_dim (-2) to avoid random errors such as: https://github.com/huggingface/transformers/pull/28032#issuecomment-1863691941
                     batch_index, non_attended_tokens = torch.where(first_layer_past_key_value.float().sum(-2) == 0)
-                    logger.info(f"""llava batch_index: {batch_index} non_attended_tokens: {non_attended_tokens}""")
                     # Get the target length
                     past_length = first_layer_past_key_value.shape[-1]
                     extended_attention_mask = torch.ones(
@@ -266,8 +262,6 @@ class LlavaNextForConditionalGeneration(GaudiLlavaNextForConditionalGeneration):
 
                     attention_mask = extended_attention_mask
                     attention_mask[:, -pad_len:] = 0
-                    logger.info(f"""llava attention_mask: {attention_mask}""")
-                    logger.info(f"""llava attention_mask.shape: {attention_mask.shape}""")
 
                 if attention_mask is not None and position_ids is None:
                     # create position_ids on the fly for batch generation
