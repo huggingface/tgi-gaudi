@@ -511,70 +511,30 @@ class VlmCausalLMBatch(CausalLMBatch):
         new_bs = total_requests
         if not is_warmup:
             new_bs = round_up(DECODE_WARMUP_BATCH_SIZE_LIST,total_requests)
-        batch_padding = new_bs - total_requests
-            
-        concat_needed = False
-        only_padding_needed = False
+
         if len(batches) > 1:
-            concat_needed = True
+            scenario = "CONCAT"
         elif batches[0].prefilling:
-            only_padding_needed = True
-            batch = batches[0]
-            batch.padding_process(pad_token_id)
-            return batch
+            scenario = "SHIFT"
         else:
             return batches[0]
 
-        if only_padding_needed:
+        dbg_trace(
+            scenario,
+            f"bs:{[b.batch_size for b in batches]}->{new_bs}"
+            f" reqs:{[len(b) for b in batches]}"
+        )
+
+        if scenario == "SHIFT":
             batch = batches[0]
             batch.padding_process(pad_token_id)
-            # batch.input_ids = torch.index_select(batch.input_ids, 1, batch.token_idx - 1)
-            # right_padding = MAX_TOTAL_TOKENS - batch.attention_mask.shape[1]
-            # batch.input_ids = torch.nn.functional.pad(
-            #     batch.input_ids, (0, 0, 0, batch_padding), value=0
-            # )
-            # batch.attention_mask = torch.nn.functional.pad(
-            #     batch.attention_mask, (0, right_padding, 0, batch_padding), value=0
-            # )
-            # if batch.position_ids is not None:
-            #     batch.position_ids = torch.nn.functional.pad(
-            #         batch.position_ids, (0, 0, 0, batch_padding), value=batch.position_ids[0, 0].item()
-            #     )
-            # if batch.cross_attention_mask is not None:
-            #     batch.cross_attention_mask = torch.nn.functional.pad(
-            #         batch.cross_attention_mask, (0, 0, 0, 0, 0, right_padding), value=0
-            #     )
-            # if batch.past_key_values is not None:
-            #     past_key_values_list = list(batch.past_key_values)
-            #     for layer_id in range(len(batch.past_key_values)):
-            #         past_key_value_list = list(batch.past_key_values[layer_id])
-            #         if layer_id in CROSS_ATTENTION_LAYERS:
-            #             past_key_value_list[0] = torch.nn.functional.pad(
-            #                 batch.past_key_values[0], (0, 0, 0, 0, 0, 0, 0, batch_padding), value=0
-            #             )
-            #             past_key_value_list[layer_id][1] = torch.nn.functional.pad(
-            #                 batch.past_key_values[1], (0, 0, 0, 0, 0, 0, 0, batch_padding), value=0
-            #             )
-                        
-            #         else:
-            #             past_key_value_list[0] = torch.nn.functional.pad(
-            #                 batch.past_key_values[layer_id][0], (0, 0, 0, right_padding, 0, 0, 0, batch_padding), value=0
-            #             )
-            #             past_key_value_list[1] = torch.nn.functional.pad(
-            #                 batch.past_key_values[layer_id][1], (0, 0, 0, right_padding, 0, 0, 0, batch_padding), value=0
-            #             )
-            #         past_key_values_list[layer_id] = tuple(past_key_value_list)
-            #     batch.past_key_values = tuple(past_key_values_list)
-            # batch.prefilling = False
-            return batch 
-            
+            return batch
+
         total_batch_size = 0
         max_input_length = 0
-        padding_right_offset = 0
         for i, batch in enumerate(batches):
             total_batch_size += len(batch)
             max_input_length = max(max_input_length, batch.input_length) 
-            padding_right_offset = max(padding_right_offset, batch.right_padding)
 
         # Batch attributes
         requests = []
@@ -634,9 +594,9 @@ class VlmCausalLMBatch(CausalLMBatch):
 
             if top_n_tokens_tensor is None:
                 top_n_tokens_tensor = batches[0].top_n_tokens_tensor.new_zeros(
-                    total_batch_size,
+                    new_bs,
                 )
-            top_n_tokens_tensor[start_index:end_index] = batch.top_n_tokens_tensor
+            top_n_tokens_tensor[start_index:end_index] = batch.top_n_tokens_tensor[:len(batch)]
 
             attention_mask[
                 start_index:end_index,
@@ -705,6 +665,8 @@ class VlmCausalLMBatch(CausalLMBatch):
             padded_past_values = first_past_kvs[layer_id][1].new_zeros(padded_past_keys_shape)
             start_index = 0
             for batch in batches:
+                left_offset = max_input_length - batch.input_ids.shape[1]
+                right_padding = MAX_TOTAL_TOKENS - max_input_length
                 past_keys = batch.past_key_values[layer_id][0]
                 past_values = batch.past_key_values[layer_id][1]
                 # Clear reference to the original tensor
@@ -734,8 +696,10 @@ class VlmCausalLMBatch(CausalLMBatch):
             past_key_values.append(tuple([padded_past_keys, padded_past_values]))
         past_key_values = tuple(past_key_values) 
         
-        
         batch_id = batches[0].batch_id
+        top_n_tokens.extend([-1] * (new_bs - total_batch_size))
+        fsm_grammar_states.extend([-1] * (new_bs - total_batch_size))
+        parameters = pad_next_token_chooser_parameters(parameters, new_bs)
         next_token_chooser = HeterogeneousNextTokenChooser.from_pb(
             parameters,
             batches[0].next_token_chooser.dtype,
