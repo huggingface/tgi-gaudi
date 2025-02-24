@@ -318,29 +318,24 @@ class VlmCausalLMBatch(CausalLMBatch):
         bucket_size = max_input_length
         left_padding = max_input_length - input_len
         if is_warmup is False:
-            if input_len < max_input_length :
-                rounded_seq_len = round_up(PREFILL_WARMUP_SEQLEN_LIST, input_len + 1)
-                if rounded_seq_len <= max_input_length:
-                    bucket_size = rounded_seq_len - 1
-                else:
-                    bucket_size = max_input_length - 1
-                left_padding = bucket_size - input_len
+            rounded_seq_len = round_up(PREFILL_WARMUP_SEQLEN_LIST, input_len + 1)
+            bucket_size = rounded_seq_len - 1
+            left_padding = bucket_size - input_len
 
         input_ids = tokenized_inputs["input_ids"]
         attention_mask = tokenized_inputs["attention_mask"]
         cross_attention_mask = tokenized_inputs.get("cross_attention_mask", None)
         # Allocate space for first token
-        if left_padding > 0:
-            input_ids = torch.nn.functional.pad(
-                input_ids, (left_padding, 1), value=tokenizer.pad_token_id
+        input_ids = torch.nn.functional.pad(
+            input_ids, (left_padding, 1), value=tokenizer.pad_token_id
+        )
+        attention_mask = torch.nn.functional.pad(
+            attention_mask, (left_padding, 1), value=0
+        )
+        if cross_attention_mask is not None:
+            cross_attention_mask = torch.nn.functional.pad(
+                cross_attention_mask, (0, 0, 0, 0, left_padding, 1), value=0
             )
-            attention_mask = torch.nn.functional.pad(
-                attention_mask, (left_padding, 1), value=0
-            )
-            if cross_attention_mask is not None:
-                cross_attention_mask = torch.nn.functional.pad(
-                    cross_attention_mask, (0, 0, 0, 0, left_padding, 1), value=0
-                )
         all_input_ids = torch.nn.functional.pad(
             input_ids, (0, max_new_tokens), value=tokenizer.pad_token_id
         ).T.split(1, dim=1)
@@ -357,7 +352,6 @@ class VlmCausalLMBatch(CausalLMBatch):
         cross_attention_mask = cross_attention_mask.to(device) if cross_attention_mask is not None else None
         position_ids = attention_mask.long().cumsum(-1) - 1
         position_ids.masked_fill_(attention_mask == 0, 1)
-
         htorch.core.mark_step()
 
         return cls(
@@ -463,7 +457,7 @@ class VlmCausalLMBatch(CausalLMBatch):
         batch_tokenized_inputs, image_inputs = cls.batch_tokenized_inputs(
             pb.requests, tokenizer, processor, config, is_warmup
         )
-        batch = cls.from_tokenized(pb, tokenizer, batch_tokenized_inputs, dtype, device)
+        batch = cls.from_tokenized(pb, tokenizer, batch_tokenized_inputs, dtype, device, is_warmup=is_warmup)
         if image_inputs is not None:
             batch.pixel_values = image_inputs["pixel_values"].to(device=device)
             if "pixel_attention_mask" in image_inputs:
@@ -535,7 +529,6 @@ class VlmCausalLMBatch(CausalLMBatch):
         for i, batch in enumerate(batches):
             total_batch_size += len(batch)
             max_input_length = max(max_input_length, batch.input_length) 
-
         # Batch attributes
         requests = []
         input_lengths = []
@@ -555,18 +548,15 @@ class VlmCausalLMBatch(CausalLMBatch):
         # Equivalent to a cumsum on batch sizes
         start_index = 0
         for i, batch in enumerate(batches):
-            if i != 0:
-                # We need to offset the mapping for each batch by the cumulative batch size
-                for request in batch.requests:
-                    new_idx = request.idx + start_index
-                    request.update_idx(new_idx)
-
+            keep_indices = []
+            for req in batch.requests:
+                keep_indices.append(req.idx)
 
             requests.extend(batch.requests)
             parameters.extend([r.data.parameters for r in batch.requests])
-            fsm_grammar_states.extend([batch.next_token_chooser.fsm_grammar_states[i] for i in range(len(batch.requests))])
+            fsm_grammar_states.extend([batch.next_token_chooser.fsm_grammar_states[i] for i in keep_indices])
             input_lengths.extend([batch.input_length])
-            top_n_tokens.extend(batch.top_n_tokens)
+            top_n_tokens.extend([batch.top_n_tokens[i] for i in keep_indices])
 
                      # Slicing end index for this batch
             end_index = start_index + len(batch)
@@ -582,28 +572,28 @@ class VlmCausalLMBatch(CausalLMBatch):
                 input_ids = batch.input_ids.new_empty((new_bs, MAX_TOTAL_TOKENS))
             # # Copy to correct indices
 
-            left_offset = max_input_length - batch.input_ids.shape[1]
+            left_offset = max_input_length - batch.input_length
             right_padding = MAX_TOTAL_TOKENS - max_input_length
-            input_ids[start_index:end_index, left_offset:-right_padding] = batch.input_ids[:len(batch)]
+            input_ids[start_index:end_index, left_offset:-right_padding] = batch.input_ids[keep_indices, :batch.input_length]
 
             # Create padded tensor
+            if top_n_tokens_tensor is None:
+                top_n_tokens_tensor = batches[0].top_n_tokens_tensor.new_zeros(
+                    new_bs,
+                )
+            top_n_tokens_tensor[start_index:end_index] = batch.top_n_tokens_tensor[keep_indices]
+
             if attention_mask is None:
                 attention_mask = batch.attention_mask.new_zeros(
                     (new_bs, MAX_TOTAL_TOKENS),
                 )
 
-            if top_n_tokens_tensor is None:
-                top_n_tokens_tensor = batches[0].top_n_tokens_tensor.new_zeros(
-                    new_bs,
-                )
-            top_n_tokens_tensor[start_index:end_index] = batch.top_n_tokens_tensor[:len(batch)]
-
             attention_mask[
                 start_index:end_index,
                 left_offset:-right_padding,
             ] = batch.attention_mask[
-                :len(batch),
-                :,
+                keep_indices,
+                :batch.input_length,
             ]
 
             if batch.cross_attention_mask is not None:
@@ -619,15 +609,15 @@ class VlmCausalLMBatch(CausalLMBatch):
                     start_index:end_index,
                     left_offset:-right_padding,
                 ] = batch.cross_attention_mask[
-                    :len(batch),
-                    :,
+                    keep_indices,
+                    :batch.input_length,
                 ]
 
             # Create empty tensor
             # position_ids is always of shape [batch_size, 1]
             if position_ids is None:
                 position_ids = batch.position_ids.new_empty((new_bs, 1))
-            position_ids[start_index:end_index] = batch.position_ids[:len(batch), :]
+            position_ids[start_index:end_index] = batch.position_ids[keep_indices, :]
 
             # Shenanigans to get dimensions because BLOOM outputs a past with a different shape
             # BLOOM Keys:   [batch_size * num_heads, head_dim, seq_length]
@@ -665,7 +655,11 @@ class VlmCausalLMBatch(CausalLMBatch):
             padded_past_values = first_past_kvs[layer_id][1].new_zeros(padded_past_keys_shape)
             start_index = 0
             for batch in batches:
-                left_offset = max_input_length - batch.input_ids.shape[1]
+                keep_indices = []
+                for req in batch.requests:
+                    keep_indices.append(req.idx)
+
+                left_offset = max_input_length - batch.input_length
                 right_padding = MAX_TOTAL_TOKENS - max_input_length
                 past_keys = batch.past_key_values[layer_id][0]
                 past_values = batch.past_key_values[layer_id][1]
@@ -677,18 +671,18 @@ class VlmCausalLMBatch(CausalLMBatch):
                 # We slice the keys to remove the padding from previous batches
                 if layer_id in CROSS_ATTENTION_LAYERS:
                     padded_past_keys[start_index:end_index, :, :, :] = (
-                        past_keys[:len(batch), :, :, :]
+                        past_keys[keep_indices, :, :, :]
                     )
                     padded_past_values[start_index:end_index, :, :, :] = (
-                        past_values[:len(batch), :, :, :]
+                        past_values[keep_indices, :, :, :]
                     )
                     
                 else:
                     padded_past_keys[start_index:end_index, :, left_offset:-right_padding, :] = (
-                        past_keys[:len(batch), :, :, :]
+                        past_keys[keep_indices, :, :batch.input_length, :]
                     )
                     padded_past_values[start_index:end_index, :, left_offset:-right_padding, :] = (
-                        past_values[:len(batch), :, :, :]
+                        past_values[keep_indices, :, :batch.input_length, :]
                     )
 
                 start_index = end_index
@@ -699,6 +693,10 @@ class VlmCausalLMBatch(CausalLMBatch):
         batch_id = batches[0].batch_id
         top_n_tokens.extend([-1] * (new_bs - total_batch_size))
         fsm_grammar_states.extend([-1] * (new_bs - total_batch_size))
+
+        for idx, req in enumerate(requests):
+            req.idx = idx
+
         parameters = pad_next_token_chooser_parameters(parameters, new_bs)
         next_token_chooser = HeterogeneousNextTokenChooser.from_pb(
             parameters,
@@ -1413,7 +1411,7 @@ class VlmCausalLM(Model):
                 batches = []
                 while batch_size <= max_decode_batch_size:
                     for i in range(int(batch_size/max_prefill_batch_size)) :
-                        batch = self.generate_warmup_batch(request, PREFILL_WARMUP_SEQLEN_LIST[0], max_prefill_batch_size, is_warmup=True)
+                        batch = self.generate_warmup_batch(request, PREFILL_WARMUP_SEQLEN_LIST[0]-1, max_prefill_batch_size, is_warmup=False)
                         _, prefill_batch, _ = self.generate_token([batch], is_warmup=True)
                         batches.append(prefill_batch)
 
@@ -1426,7 +1424,7 @@ class VlmCausalLM(Model):
                     max_decode_batch_size = math.floor( max_decode_batch_size / 2) * 2
                     batch_size = max_decode_batch_size
                     for i in range(int(max_decode_batch_size / 2)) :
-                        batch = self.generate_warmup_batch(request, PREFILL_WARMUP_SEQLEN_LIST[0], 2, is_warmup=True)
+                        batch = self.generate_warmup_batch(request, PREFILL_WARMUP_SEQLEN_LIST[0]-1, 2, is_warmup=False)
                         _, prefill_batch, _ = self.generate_token([batch], is_warmup=True)
                         batches.append(prefill_batch)
                     _, decode_batch, _ = self.generate_token(batches, is_warmup=True)
