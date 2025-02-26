@@ -402,8 +402,10 @@ class VlmCausalLMBatch(CausalLMBatch):
 
             texts.append(curr_text)
             if curr_image is not None:
-                images.append(curr_image)
-                image_indices.append(curr_i)
+                if config.model_type == "mllama":
+                    images.append([curr_image])
+                else:
+                    images.append(curr_image)
 
         missing_inputs = 0
         dummy_images = None
@@ -414,7 +416,10 @@ class VlmCausalLMBatch(CausalLMBatch):
                 dummy_inputs = []
                 if len(texts) > 0:
                     dummy_inputs = [texts[0]] * missing_inputs
-                    dummy_images = [images[0]] * missing_inputs
+                    if config.model_type == "mllama":
+                        dummy_images = [[images[0]]] * missing_inputs
+                    else:
+                        dummy_images = [images[0]] * missing_inputs
                 texts += dummy_inputs
                 images += dummy_images
         processor_output = processor(images,
