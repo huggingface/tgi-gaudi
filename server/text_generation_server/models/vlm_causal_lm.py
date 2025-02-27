@@ -417,7 +417,7 @@ class VlmCausalLMBatch(CausalLMBatch):
                 if len(texts) > 0:
                     dummy_inputs = [texts[0]] * missing_inputs
                     if config.model_type == "mllama":
-                        dummy_images = [[images[0]]] * missing_inputs
+                        dummy_images = [images[0]] * missing_inputs
                     else:
                         dummy_images = [images[0]] * missing_inputs
                 texts += dummy_inputs
