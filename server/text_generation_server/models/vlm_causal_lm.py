@@ -431,7 +431,6 @@ class VlmCausalLMBatch(CausalLMBatch):
                                      padding_side="left",
                                      padding="longest")
         if "input_ids" in processor_output:
-            input_ids = processor_output["input_ids"]
             batch_tokenized_inputs.update({"input_ids" : processor_output["input_ids"]})
         if "attention_mask" in processor_output:
             batch_tokenized_inputs.update({"attention_mask" : processor_output["attention_mask"]})
