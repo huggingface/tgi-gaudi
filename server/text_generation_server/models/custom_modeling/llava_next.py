@@ -229,9 +229,8 @@ class LlavaNextForConditionalGeneration(GaudiLlavaNextForConditionalGeneration):
                             image_feature = image_feature[0]
                             image_feature = torch.cat((image_feature, self.image_newline[None]), dim=0)
                         new_image_features.append(image_feature)
-                    image_features = torch.stack(new_image_features, dim=0)
+                    image_features = torch.cat(new_image_features, dim=0)
                     inputs_embeds = self._merge_input_ids_with_image_features(inputs_embeds, image_features, input_ids)
-                    self.image_offset = image_features.shape[1] - 1  # image_token has occupied 1 token position.
                 # In case input_ids.shape[1] == 1 & pixel_values==None & past_key_values != None, we are in the case of
                 # generation with cache
                 elif past_key_values is not None:
