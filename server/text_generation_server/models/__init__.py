@@ -33,7 +33,7 @@ from text_generation_server.utils.adapter import (
 from optimum.habana.transformers.modeling_utils import adapt_transformers_to_gaudi
 
 
-SDP_ON_BF16 = int(os.environ.get("SDP_ON_BF16", 1))
+SDP_ON_BF16 = int(os.environ.get("SDP_ON_BF16", 0))
 # Disable gradients
 torch.set_grad_enabled(False)
 
